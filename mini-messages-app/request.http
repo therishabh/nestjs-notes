@@ -11,9 +11,8 @@ POST {{baseUrl}}/messages
 Content-Type: application/json
 
 {
-  "text": "Hello, World!",
-  "author": "22",
-  "age": 33
+  "message": "Hello, Second Message!",
+  "category": "general"
 }
 
 ### Update a message by id

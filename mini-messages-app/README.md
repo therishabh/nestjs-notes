@@ -141,6 +141,20 @@ Har method try/catch me wrap kiya hai — file read/write ya JSON parse fail hon
 
 Root me `messages.json` file banayi jo repository ke liye seed data ka kaam karti hai — abhi ye ek fake "database" hai jise repository read/write karta hai.
 
+## Step 14: `MessagesService`/`MessagesRepository` Ko DI Ke Through Wire Kiya
+
+`MessagesService` aur `MessagesRepository` dono classes pe `@Injectable()` decorator missing tha, aur `MessagesModule` ke `providers` array me bhi register nahi the — isse Nest app start hote hi `MessagesController` ki dependency resolve nahi kar pa raha tha. Fix kiya:
+
+- `messages.service.ts` aur `messages.repository.ts` dono pe `@Injectable()` laga diya
+- `messages.module.ts` ke `providers: [MessagesService, MessagesRepository]` add kiya
+- `messages.repository.ts` ke `IMessage`/`IResponseMessage`/`ICreateMessageDto` interfaces ko `export` kiya, kyunki `tsconfig.json` me `declaration: true` hai aur public method return types me use hone wale types bhi export hone chahiye (warna TS4053 error aata hai)
+
+Controller ka `updateMessage()` route bhi pehle service ko call hi nahi kar raha tha (sirf ek static string return kar raha tha) — ab wo `CreateMessageDto` body accept karke `messageService.updateMessage(id, body)` call karta hai.
+
+## Step 15: `messages.json` Ko Array Format Me Fix Kiya
+
+`messages.json` galti se `{}` (object) tha, jabki repository ka code isse `IMessage[]` (array) maan kar `.filter()`/`.push()` karta hai — isi wajah se `POST /messages` call karne par `"Expected double-quoted property name in JSON..."` jaisa parse/type error aa raha tha. File ko `[]` (empty array) se initialize kiya.
+
 ## Kaise Run Kare
 
 ```bash
@@ -167,3 +181,4 @@ Server `http://localhost:3000` pe start hoga. `request.http` file open karke saa
 - Soft delete pattern (`isDeleted` flag + `deleted_at` timestamp)
 - `crypto.randomUUID()` se unique IDs generate karna
 - Repository methods me try/catch se error handling
+- Providers ko `@Injectable()` + module ke `providers` array se register karna (Dependency Injection)

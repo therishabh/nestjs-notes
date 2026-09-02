@@ -1,11 +1,20 @@
-{
-  "11": {
-    "id": 11,
-    "message": "Hello, how can I help you today?",
-    "category": "greeting",
-    "created_at": "2024-06-01T10:00:00Z",
-    "updated_at": "2024-06-01T10:00:00Z",
+[
+  {
+    "id": "fe4c2355-07ff-4baf-a5c9-a85c213890a5",
+    "message": "Hello, World!",
+    "category": "general",
+    "created_at": "2026-09-02T14:26:39.530Z",
+    "updated_at": "2026-09-02T14:26:39.530Z",
+    "deleted_at": null,
+    "isDeleted": false
+  },
+  {
+    "id": "832aabde-72ba-449d-93dd-eda16479dc97",
+    "message": "Hello, Second Message!",
+    "category": "general",
+    "created_at": "2026-09-02T14:27:06.993Z",
+    "updated_at": "2026-09-02T14:27:06.993Z",
     "deleted_at": null,
     "isDeleted": false
   }
-}
+]

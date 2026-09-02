@@ -3,8 +3,9 @@ import { IsNotEmpty, IsString } from 'class-validator';
 export class CreateMessageDto {
   @IsString()
   @IsNotEmpty()
-  text!: string;
+  message!: string;
 
   @IsString()
-  author!: string;
+  @IsNotEmpty()
+  category!: string;
 }

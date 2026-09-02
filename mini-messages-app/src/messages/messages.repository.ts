@@ -1,7 +1,8 @@
+import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { readFile, writeFile } from 'fs/promises';
 
-interface IMessage {
+export interface IMessage {
   id: string;
   message: string;
   category: string;
@@ -10,17 +11,18 @@ interface IMessage {
   deleted_at: string | null;
   isDeleted: boolean;
 }
-interface IResponseMessage {
+export interface IResponseMessage {
   id: string;
   message: string;
   category: string;
   created_at: string;
 }
 
-interface ICreateMessageDto {
+export interface ICreateMessageDto {
   message: string;
   category: string;
 }
+@Injectable()
 export class MessagesRepository {
   async findAll(): Promise<IResponseMessage[]> {
     try {
@@ -77,6 +79,7 @@ export class MessagesRepository {
         isDeleted: false,
       };
       messages.push(newMessage);
+      console.log(messages);
       await writeFile('messages.json', JSON.stringify(messages, null, 2));
       const result: IResponseMessage = {
         id: newMessage.id,
