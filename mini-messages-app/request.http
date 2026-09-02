@@ -12,7 +12,8 @@ Content-Type: application/json
 
 {
   "text": "Hello, World!",
-  "author": "John Doe"
+  "author": "22",
+  "age": 33
 }
 
 ### Update a message by id

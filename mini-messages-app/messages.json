@@ -1,0 +1,11 @@
+{
+  "11": {
+    "id": 11,
+    "message": "Hello, how can I help you today?",
+    "category": "greeting",
+    "created_at": "2024-06-01T10:00:00Z",
+    "updated_at": "2024-06-01T10:00:00Z",
+    "deleted_at": null,
+    "isDeleted": false
+  }
+}

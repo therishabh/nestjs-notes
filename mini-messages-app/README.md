@@ -94,9 +94,52 @@ export class CreateMessageDto {
 - `!` (definite assignment assertion) use kiya kyunki DTO properties constructor me set nahi hoti — inki value request body se `ValidationPipe` ke `transform` ke through aati hai, isse TypeScript ka "no initializer" (strict property initialization) error fix ho jata hai
 - Abhi ye DTO banayi hai lekin controller me `createMessage()`/`updateMessage()` me abhi bhi inline `{ text: string }` type use ho raha hai — DTO ko route me actually use karna agla step hoga
 
-## Step 9: `request.http` File Banayi
+## Step 9: `text` Field Ko Required Banaya
+
+`CreateMessageDto` ke `text` field pe `@IsNotEmpty()` decorator add kiya:
+
+```ts
+@IsString()
+@IsNotEmpty()
+text!: string;
+```
+
+`@IsString()` sirf type check karta hai (empty string `""` bhi valid string maani jaati hai), isliye field ko sach me required (non-empty) banane ke liye `@IsNotEmpty()` alag se lagana zaroori hai. Ab agar `text` empty, `null`, ya `undefined` bheja gaya to global `ValidationPipe` `400 Bad Request` error de dega.
+
+## Step 10: `request.http` File Banayi
 
 Root me `request.http` file banayi (REST Client / VS Code extension ke saath use karne ke liye) jisme saare 4 routes ke test requests likhe hain — `GET /messages`, `GET /messages/:id`, `POST /messages` (JSON body ke saath), `PUT /messages/:id` (JSON body ke saath).
+
+## Step 11: `CreateMessageDto` Ko Controller Me Actually Use Kiya
+
+Pehle `createMessage()` me inline type `{ text: string }` tha, ab usse hata kar asli `CreateMessageDto` use kiya:
+
+```ts
+@Post('/')
+createMessage(@Body() body: CreateMessageDto) {
+  return (
+    'Message created with text: ' + body.text + ' and author: ' + body.author
+  );
+}
+```
+
+Ab request body global `ValidationPipe` ke through `CreateMessageDto` ke rules (`@IsString`, `@IsNotEmpty`) se validate hoti hai, aur `whitelist`/`forbidNonWhitelisted` ki wajah se DTO me na likhi extra properties (jaise `age`) request reject kar degi.
+
+## Step 12: `MessagesRepository` Banaya (JSON File Based Fake DB)
+
+`src/messages/messages.repository.ts` me ek repository class banayi jo `messages.json` file ko as a database use karti hai (`fs/promises` ke `readFile`/`writeFile` se):
+
+- `findAll()` — sirf non-deleted (`isDeleted: false`) messages return karta hai, `created_at` ke hisaab se descending sort karke, aur response me sirf zaroori fields (`id`, `message`, `category`, `created_at`) bhejta hai
+- `findById(id)` — id se ek message dhoondta hai (deleted messages exclude karke)
+- `create(messageData)` — naya message file me push karta hai; id ke liye `crypto.randomUUID()` use kiya (pehle `messages.length + 1` tha jo duplicate ids de sakta tha agar messages delete hote)
+- `update(id, messageData)` — existing message ke `message`/`category`/`updated_at` update karta hai
+- `delete(id)` — hard delete ke bajaye soft delete karta hai (`isDeleted: true`, `deleted_at` set karta hai)
+
+Har method try/catch me wrap kiya hai — file read/write ya JSON parse fail hone par raw error leak karne ke bajaye ek clean `Error` throw hota hai (aur `console.error` se log bhi ho jata hai).
+
+## Step 13: `messages.json` Data File Add Ki
+
+Root me `messages.json` file banayi jo repository ke liye seed data ka kaam karti hai — abhi ye ek fake "database" hai jise repository read/write karta hai.
 
 ## Kaise Run Kare
 
@@ -117,5 +160,10 @@ Server `http://localhost:3000` pe start hoga. `request.http` file open karke saa
 - Request body read karne ke liye `@Body()` decorator
 - ESLint `no-floating-promises` aur `void` operator ka use
 - Global `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`, `transform`)
-- DTOs aur `class-validator` decorators (`@IsString`)
+- DTOs aur `class-validator` decorators (`@IsString`, `@IsNotEmpty`)
 - `.http` files se API testing (REST Client)
+- Controller me DTO ko route handler ke actual type ke roop me use karna
+- File-based repository pattern (`fs/promises` se JSON file read/write)
+- Soft delete pattern (`isDeleted` flag + `deleted_at` timestamp)
+- `crypto.randomUUID()` se unique IDs generate karna
+- Repository methods me try/catch se error handling
