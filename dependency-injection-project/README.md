@@ -2,6 +2,9 @@
 
 Ye project Nest CLI se generate kiya gaya hai (`nest new dependency-injection-project`), aur isme NestJS ke **Dependency Injection (DI)** system ko step by step deep-dive karke practice kiya jayega. Neeche jo bhi kiya hai wo order me likha hai — jab bhi kuch naya add karo, isi file me neeche add karte jana.
 
+<img width="1119" height="790" alt="Screenshot 2026-09-03 at 12 18 08 AM" src="https://github.com/user-attachments/assets/146ba1bb-6a1a-4dbf-9569-1831ca7c6b6e" />
+
+
 ## Table of Contents
 
 - [Project Structure](#project-structure)
