@@ -4,7 +4,7 @@
 GET {{baseUrl}}/messages
 
 ### Get a message by id
-GET {{baseUrl}}/messages/4
+GET {{baseUrl}}/messages/fe4c2355-07ff-4baf-a5c9-a85c213890a
 
 ### Create a message
 POST {{baseUrl}}/messages

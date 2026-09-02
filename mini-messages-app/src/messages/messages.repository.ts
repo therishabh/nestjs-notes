@@ -58,7 +58,16 @@ export class MessagesRepository {
         (msg: IMessage) => !msg.isDeleted,
       );
       const message = filteredMessages.find((msg: IMessage) => msg.id === id);
-      return message || null;
+      if (message) {
+        const result = {
+          id: message.id,
+          message: message.message,
+          category: message.category,
+          created_at: message.created_at,
+        };
+        return result || null;
+      }
+      return null;
     } catch (error) {
       console.error(`Failed to fetch message with id ${id}:`, error);
       throw new Error('Failed to fetch message');

@@ -23,6 +23,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new mini-messages-app`), au
   - [Step 13: `messages.json` Data File Add Ki](#step-13-messagesjson-data-file-add-ki)
   - [Step 14: `MessagesService`/`MessagesRepository` Ko DI Ke Through Wire Kiya](#step-14-messagesservicemessagesrepository-ko-di-ke-through-wire-kiya)
   - [Step 15: `messages.json` Ko Array Format Me Fix Kiya](#step-15-messagesjson-ko-array-format-me-fix-kiya)
+  - [Step 16: `GET /messages/:id` Me 404 Handling Aur Clean Response Shape](#step-16-get-messagesid-me-404-handling-aur-clean-response-shape)
 - [Concepts Glossary](#concepts-glossary)
 
 ## Project Structure
@@ -49,7 +50,7 @@ Layering flow: **Controller → Service → Repository → `messages.json`**. Co
 | Method | Route            | Body (`CreateMessageDto`)            | Response                                                   |
 | ------ | ----------------- | ------------------------------------- | ------------------------------------------------------------ |
 | GET    | `/messages`       | —                                      | Non-deleted messages ki list, `created_at` desc sorted        |
-| GET    | `/messages/:id`   | —                                      | Ek message (`id`, `message`, `category`, `created_at`) ya `null` |
+| GET    | `/messages/:id`   | —                                      | Ek message (`id`, `message`, `category`, `created_at`) ya `404 Not Found` |
 | POST   | `/messages`       | `{ "message": string, "category": string }` | Newly created message (`id` + timestamps ke saath)      |
 | PUT    | `/messages/:id`   | `{ "message": string, "category": string }` | Updated message, ya `null` agar `id` nahi mila            |
 
@@ -358,6 +359,62 @@ Ab `JSON.parse()` se ek asli array milta hai, `messages.push()` sahi se kaam kar
 
 **Seekh:** jab bhi koi file-based ya JSON-based "fake DB" use kar rahe ho, uska seed/initial content hamesha usi shape (array vs object) me hona chahiye jis shape ko code assume kar raha hai — TypeScript ka `as` type assertion sirf compile-time par types ko "convince" karta hai, runtime par actual data ko validate ya convert nahi karta.
 
+### Step 16: `GET /messages/:id` Me 404 Handling Aur Clean Response Shape
+
+#### Problem kya tha
+
+`MessagesRepository.findById()` na milne par `null` return karta tha, lekin controller usse seedha response me bhej deta tha — matlab agar `id` exist nahi karta to bhi HTTP status `200 OK` hi milta tha, body me sirf `null`. Client ko "not found" ka koi proper signal nahi milta tha:
+
+```ts
+// pehle — controller
+@Get('/:id')
+getMessageById(@Param('id') id: string): any {
+  return this.messageService.findById(id);
+}
+
+// pehle — repository
+const message = filteredMessages.find((msg: IMessage) => msg.id === id);
+return message || null;
+```
+
+Ek aur chhota issue ye bhi tha ki `findById()` poora `IMessage` object return kar raha tha — internal fields (`updated_at`, `deleted_at`, `isDeleted`) sahit — jabki `findAll()` sirf zaroori fields (`id`, `message`, `category`, `created_at`) hi bhejta hai. Dono methods ka response shape consistent nahi tha.
+
+#### Fix kya kiya
+
+**Repository** — `findById()` ab bhi match na milne par `null` hi return karta hai, lekin jab message milta hai to usse `findAll()` ki tarah hi ek clean object me shape karta hai (sirf public fields):
+
+```ts
+const message = filteredMessages.find((msg: IMessage) => msg.id === id);
+if (message) {
+  const result = {
+    id: message.id,
+    message: message.message,
+    category: message.category,
+    created_at: message.created_at,
+  };
+  return result || null;
+}
+return null;
+```
+
+**Controller** — ab `findById()` ka result await karke check karta hai, agar `null`/falsy mila to Nest ka built-in `NotFoundException` throw karta hai, jisse client ko proper `404 Not Found` status aur error body milta hai:
+
+```ts
+@Get('/:id')
+async getMessageById(@Param('id') id: string) {
+  const message = await this.messageService.findById(id);
+  if (!message) {
+    throw new NotFoundException('Message not found');
+  }
+
+  return message;
+}
+```
+
+`NotFoundException` `@nestjs/common` se import hoti hai — Nest ke built-in HTTP exceptions (`NotFoundException`, `BadRequestException`, `ForbiddenException`, etc.) throw karne par framework khud response ko sahi status code + JSON error body (`{ statusCode, message, error }`) me convert kar deta hai, alag se try/catch ya manual `res.status()` likhne ki zaroorat nahi padti.
+
+**Seekh:** REST API me "resource nahi mila" ke liye hamesha `404` status return karna chahiye, `200` ke saath `null` body nahi — warna client-side code ko har jagah manually check karna padega ki response `null` hai ya nahi, jabki HTTP status code khud hi ye signal de sakta hai.
+
 ---
 
 ## Concepts Glossary
@@ -386,3 +443,4 @@ Jitne bhi NestJS/TS concepts is project me cover kiye hain, unki short reference
 | **Module `providers` array** | [Step 14](#step-14-messagesservicemessagesrepository-ko-di-ke-through-wire-kiya) | `@Injectable()` classes ko us module ke DI scope me actually register karta hai — sirf decorator kaafi nahi |
 | **TS4053 / `declaration: true`** | [Step 14](#step-14-messagesservicemessagesrepository-ko-di-ke-through-wire-kiya) | Public method ke return type me use hone wale interfaces bhi export hone chahiye, warna `.d.ts` generation fail hoti hai |
 | **Runtime type mismatch vs `as` assertion** | [Step 15](#step-15-messagesjson-ko-array-format-me-fix-kiya) | TypeScript ka `as X[]` sirf compile-time par "convince" karta hai — runtime par actual data shape (jaise JSON file ka content) alag ho sakta hai aur crash de sakta hai |
+| **Built-in HTTP exceptions** (`NotFoundException`) | [Step 16](#step-16-get-messagesid-me-404-handling-aur-clean-response-shape) | `@nestjs/common` ke exception classes — throw karne par Nest khud sahi HTTP status + JSON error body bana deta hai, manual `res.status()` ki zaroorat nahi |
