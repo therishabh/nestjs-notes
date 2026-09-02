@@ -1,0 +1,24 @@
+@baseUrl = http://localhost:3000
+
+### Get all messages
+GET {{baseUrl}}/messages
+
+### Get a message by id
+GET {{baseUrl}}/messages/4
+
+### Create a message
+POST {{baseUrl}}/messages
+Content-Type: application/json
+
+{
+  "text": "Hello, World!",
+  "author": "John Doe"
+}
+
+### Update a message by id
+PUT {{baseUrl}}/messages/1
+Content-Type: application/json
+
+{
+  "text": "Updated new message!"
+}
