@@ -12,6 +12,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 2: Users aur Reports Modules Banaye](#step-2-users-aur-reports-modules-banaye)
   - [Step 3: TypeORM + SQLite Setup Kiya](#step-3-typeorm--sqlite-setup-kiya)
   - [Step 4: User Entity Banaya](#step-4-user-entity-banaya)
+  - [Step 5: Report Entity Banaya](#step-5-report-entity-banaya)
 - [Concepts Glossary](#concepts-glossary)
 
 ## App Overview
@@ -35,13 +36,14 @@ my-car-value-project/
     ├── app.service.ts                   # Default scaffold service
     ├── users/
     │   ├── users.controller.ts          # `/users` route ka entry point (abhi khaali, aage endpoints add honge)
-    │   ├── users.service.ts             # Users se related business logic (abhi khaali)
+    │   ├── users.service.ts             # Users se related business logic — aage `@InjectRepository(User)` yaha inject hogi
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns)
     │   └── users.module.ts              # UsersController + UsersService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
         ├── reports.controller.ts        # `/reports` route ka entry point (abhi khaali, aage endpoints add honge)
         ├── reports.service.ts           # Reports se related business logic (abhi khaali)
-        └── reports.module.ts            # ReportsController + ReportsService ko group karta hai
+        ├── report.entity.ts             # `Report` DB table define karta hai (id, price columns)
+        └── reports.module.ts            # ReportsController + ReportsService ko group karta hai, TypeOrmModule.forFeature([Report]) se Report repository inject karne layak banata hai
 ```
 
 ## Kaise Run Kare
@@ -180,6 +182,44 @@ export class UsersModule {}
 ```
 
 Farak samajhna zaroori hai: `forRoot()` me `entities` array **global schema** define karta hai (TypeORM ko pata chalta hai kaunse tables exist karte hain), jabki `forFeature()` sirf us particular module ko us entity ka **repository** (`@InjectRepository(User)` se use hone wala) available karata hai — dono alag purpose serve karte hain.
+
+### Step 5: Report Entity Banaya
+
+`User` ke baad wahi pattern doosri entity `Report` ke liye repeat kiya gaya — car value report ke liye bhi ek DB table chahiye tha:
+
+```ts
+// reports/report.entity.ts
+@Entity()
+export class Report {
+  @PrimaryGeneratedColumn()
+  id!: number;
+
+  @Column()
+  price!: number;
+}
+```
+
+Aur `User` jaisa hi wiring do jagah kiya gaya:
+
+```ts
+// app.module.ts — Report ko bhi global entity list me add kiya
+TypeOrmModule.forRoot({
+  ...
+  entities: [User, Report],
+}),
+```
+
+```ts
+// reports.module.ts — ReportsModule ko Report ka repository inject karne layak banaya
+@Module({
+  imports: [TypeOrmModule.forFeature([Report])],
+  controllers: [ReportsController],
+  providers: [ReportsService],
+})
+export class ReportsModule {}
+```
+
+Isse ye confirm hota hai ki [Step 4](#step-4-user-entity-banaya) me seekha gaya pattern — entity banao, `forRoot()` ke `entities` me global register karo, aur jis module ko uska repository chahiye usme `forFeature()` se import karo — **har entity ke liye repeat hota hai**, ye ek fixed recipe hai jo poore project me follow hoga.
 
 ---
 
