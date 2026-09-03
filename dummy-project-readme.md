@@ -151,6 +151,58 @@ npm run migration:create --name=add_field   # Naya migration banao (schema chang
 
 ---
 
-## 8. Ek line me summary
+## 8. Module padhne ka sequence (Easy → Hard)
+
+Poora `src/` ek saath padhna mushkil hai. Neeche modules ko **size, business-logic complexity aur external-integration ke hisaab se** easy-to-hard order me group kiya gaya hai — isi order me padhoge to concepts step-by-step build honge.
+
+### Stage 1 — NestJS basics samajhne ke liye (chhote, simple modules)
+Ye modules chhote hain aur ek clean/basic module kaisa dikhta hai (controller + service + dto) ye samjhane ke liye best hain.
+- `exception`, `http`, `interceptor` — sabse chhote, sirf ek concept dikhate hain
+- `logger` — `LoggerService` kaise banaya/use kiya jata hai
+- `prisma` — DB connection kaise setup hota hai
+- `retry`, `swagger` — chhote utility-type modules
+- `contractor`, `edulevel`, `experience`, `experience-domain`, `skill` — simple CRUD-type modules (yahi se "controller → service → dto" ka flow sabse saaf samajh aayega)
+
+### Stage 2 — Thoda real-world flavor (auth, guards, common patterns)
+- `auth` — Login/JWT/Guards kaise kaam karte hain (bahut important stage — isse Guards/Decorators clear honge)
+- `category`, `medium`, `registration`, `system-link`, `document`, `speed-test`, `excep-msg` — simple modules, thoda aur business logic
+- `reattempt`, `advertiser`, `attendance`, `prometheus`, `trustpilot` — thoda aur real-world flow
+
+### Stage 3 — Cross-cutting/shared modules (in-depth samajhna zaroori hai, kyunki har jagah use hote hain)
+- `common` — poore project me shared logic (MinIO clients, helper services, etc.)
+- `feature-flag` — Unleash flags kaise check hote hain
+- `redis-cache` — Caching pattern (`@type-cacheable` decorators)
+- `util` — Date/time aur helper functions
+
+### Stage 4 — Background jobs aur external services (medium complexity)
+- `cron` — Bull queues, jobs kaise schedule/process hote hain
+- `message-bus`, `gmail`, `hrm`, `hrmec`, `sap`, `sage`, `notification`, `news`, `feedback`, `reject-reason`, `language`, `advisor-action` — external services ke saath integration ka basic pattern
+- `dashboard`, `position`, `warning`, `user-application`, `setting` — medium business-logic modules
+
+### Stage 5 — Search aur data-heavy modules
+- `es` (Elasticsearch) — search index kaise banta/update hota hai
+- `json` — data transformation heavy module
+- `reminder` — scheduled reminders (cron + business logic mix)
+
+### Stage 6 — Payment integrations (in dono ko saath me padhna, kyunki mutually exclusive hain)
+- `payoneer`
+- `papaya`
+
+### Stage 7 — Sabse complex modules (bade, deeply-integrated, sabse zyada business rules)
+Ye sabse aakhri me padho — inme sabse zyada lines of code, sabse zyada dependencies aur sabse zyada real business rules hain.
+- `geo` — Geo-related complex logic
+- `assessment`, `training` — Bade modules, kaafi business flow
+- `itm` — Complex, `payoneer` ke saath circular dependency bhi hai (`forwardRef`)
+- `emc` — Sabse bada external-integration module (EMC sync)
+- `contract` — Bahut complex module (multi-step contract signing flow — `CONTRACT_SUB_STATUS`)
+- `profile` — **Sabse bada aur sabse important module** (poore project ka core hai — applicant/freelancer lifecycle, status transitions, sabse zyada files/lines)
+
+> Note: `script/` folder alag hai — ye one-time migration scripts hain (`?dev=<n>` query param se gated), inhe learning ke liye padhna zaroori nahi hai.
+
+**Suggested approach:** Har stage me 1-2 module chuno, unka controller → service → dto → prisma padho, phir Swagger me uske APIs try karo. Stage 1-3 clear ho jaaye to Stage 4-7 apne aap easy lagne lagenge kyunki wahi patterns repeat hote hain, bas business logic zyada hoti hai.
+
+---
+
+## 9. Ek line me summary
 
 Ye ek **NestJS + Fastify** based backend hai jisme **MySQL (via Prisma)** database hai, **Redis/Bull** se background jobs chalte hain, **Elasticsearch** se fast search hota hai, **Sentry** se errors track hote hain, aur **Unleash** se features control kiye jaate hain — sab milkar Dreamport platform ka back-office (admin side) system chalate hain.
