@@ -11,6 +11,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 1: Project Generate Kiya](#step-1-project-generate-kiya)
   - [Step 2: Users aur Reports Modules Banaye](#step-2-users-aur-reports-modules-banaye)
   - [Step 3: TypeORM + SQLite Setup Kiya](#step-3-typeorm--sqlite-setup-kiya)
+  - [Step 4: User Entity Banaya](#step-4-user-entity-banaya)
 - [Concepts Glossary](#concepts-glossary)
 
 ## App Overview
@@ -35,7 +36,8 @@ my-car-value-project/
     ├── users/
     │   ├── users.controller.ts          # `/users` route ka entry point (abhi khaali, aage endpoints add honge)
     │   ├── users.service.ts             # Users se related business logic (abhi khaali)
-    │   └── users.module.ts              # UsersController + UsersService ko group karta hai
+    │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns)
+    │   └── users.module.ts              # UsersController + UsersService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
         ├── reports.controller.ts        # `/reports` route ka entry point (abhi khaali, aage endpoints add honge)
         ├── reports.service.ts           # Reports se related business logic (abhi khaali)
@@ -133,6 +135,52 @@ npm install typeorm@^0.3.20
 
 Isse ye seekhne ko mila: agar kisi library ka type error samajh na aaye, to pehle ye check karo ki **installed version compatible hai ya nahi** — kabhi kabhi bug code me nahi, `package.json` ke dependency version mismatch me hota hai.
 
+### Step 4: User Entity Banaya
+
+Ab tak `entities: []` khaali tha — pehli real entity `User` banayi gayi, jo TypeORM decorators use karke ek DB table ko represent karti hai:
+
+```ts
+// users/user.entity.ts
+@Entity()
+export class User {
+  @PrimaryGeneratedColumn()
+  id!: number;
+
+  @Column()
+  email!: string;
+
+  @Column()
+  password!: string;
+}
+```
+
+- **`@Entity()`** class ko ek DB table bana deta hai (default table naam class ke naam se, yahan `user`).
+- **`@PrimaryGeneratedColumn()`** primary key column banata hai jiski value TypeORM khud auto-increment karke generate karta hai.
+- **`@Column()`** ek normal DB column banata hai — yahan `email` aur `password` dono plain text columns hain.
+- **`!` (definite assignment assertion)** har property ke aage laga hai kyunki TypeScript ka `strictPropertyInitialization` chahta hai ki har property constructor me hi initialize ho jaaye, warna compile error deta hai. Lekin `id`/`email`/`password` humne khud `new User()` karke set nahi karni — TypeORM DB se row load karte waqt ya insert ke time inhe internally populate karta hai. `!` laga kar TS ko bola jaata hai: *"trust karo, ye value runtime pe zaroor set hogi, compile-time check mat karo."*
+
+Is entity ko do jagah register karna zaroori tha:
+
+```ts
+// app.module.ts — poori app ko batata hai ki User entity DB schema ka hissa hai
+TypeOrmModule.forRoot({
+  ...
+  entities: [User],
+}),
+```
+
+```ts
+// users.module.ts — sirf UsersModule ko User ka repository (DB queries chalane wala object) inject karne layak banata hai
+@Module({
+  imports: [TypeOrmModule.forFeature([User])],
+  controllers: [UsersController],
+  providers: [UsersService],
+})
+export class UsersModule {}
+```
+
+Farak samajhna zaroori hai: `forRoot()` me `entities` array **global schema** define karta hai (TypeORM ko pata chalta hai kaunse tables exist karte hain), jabki `forFeature()` sirf us particular module ko us entity ka **repository** (`@InjectRepository(User)` se use hone wala) available karata hai — dono alag purpose serve karte hain.
+
 ---
 
 ## Concepts Glossary
@@ -153,3 +201,8 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`entities`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Un saari classes ki list jo DB tables represent karti hain — TypeORM inhi se schema samajhta hai |
 | **`synchronize: true`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | TypeORM ko entities dekh kar DB schema (tables/columns) automatically create/update karne deta hai — dev me fast iteration ke liye achha, production me **kabhi use nahi karna** (accidental data loss ho sakta hai) |
 | **Dependency Version Mismatch** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Jab `package.json` me kisi library ka version doosri dependency (e.g. `@nestjs/typeorm`) ki required range se match nahi karta, aur usse type errors ya runtime errors aate hain — fix hamesha sahi version install karna hota hai, code nahi |
+| **`@Entity()`** | [Step 4](#step-4-user-entity-banaya) | Class ko ek DB table ke roop me register karta hai — TypeORM isi class se schema samajhta hai |
+| **`@PrimaryGeneratedColumn()`** | [Step 4](#step-4-user-entity-banaya) | Table ka primary key column banata hai, jiski value TypeORM khud auto-increment karke generate karta hai |
+| **`@Column()`** | [Step 4](#step-4-user-entity-banaya) | Class property ko ek normal DB column banata hai |
+| **Definite Assignment Assertion (`!`)** | [Step 4](#step-4-user-entity-banaya) | Property naam ke aage laga `!`, TypeScript ko batata hai ki value humne khud set nahi ki (yahan TypeORM runtime pe karega), isliye "not initialized" compile error na de |
+| **`TypeOrmModule.forRoot()` vs `forFeature()`** | [Step 4](#step-4-user-entity-banaya) | `forRoot()` poori app ke liye DB connection + global entity list define karta hai; `forFeature([Entity])` sirf us module ko us entity ka repository (DB query karne wala object) inject karne layak banata hai |
