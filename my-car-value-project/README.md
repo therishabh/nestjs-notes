@@ -13,6 +13,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 3: TypeORM + SQLite Setup Kiya](#step-3-typeorm--sqlite-setup-kiya)
   - [Step 4: User Entity Banaya](#step-4-user-entity-banaya)
   - [Step 5: Report Entity Banaya](#step-5-report-entity-banaya)
+  - [Step 6: Signup Endpoint + Validation Setup](#step-6-signup-endpoint--validation-setup)
 - [Concepts Glossary](#concepts-glossary)
 
 ## App Overview
@@ -30,14 +31,15 @@ App design aur planning ke screenshots — kya banana hai iska rough sketch:
 ```
 my-car-value-project/
 └── src/
-    ├── main.ts                          # App bootstrap — AppModule ko root bana kar NestFactory se app create/listen karta hai
+    ├── main.ts                          # App bootstrap — AppModule ko root bana kar NestFactory se app create/listen karta hai, global ValidationPipe bhi yahi lagta hai
     ├── app.module.ts                    # Root module — TypeOrmModule.forRoot() se DB connect karta hai, UsersModule aur ReportsModule import karta hai
     ├── app.controller.ts                # Default scaffold controller (GET /)
     ├── app.service.ts                   # Default scaffold service
     ├── users/
-    │   ├── users.controller.ts          # `/users` route ka entry point (abhi khaali, aage endpoints add honge)
-    │   ├── users.service.ts             # Users se related business logic — aage `@InjectRepository(User)` yaha inject hogi
+    │   ├── users.controller.ts          # `/auth` prefix ke saare routes (e.g. POST /auth/signup)
+    │   ├── users.service.ts             # Users se related business logic — `create()` DB me naya user insert karta hai
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns)
+    │   ├── user.dto.ts                  # `CreateUserDto` — signup request body ka expected shape + class-validator rules
     │   └── users.module.ts              # UsersController + UsersService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
         ├── reports.controller.ts        # `/reports` route ka entry point (abhi khaali, aage endpoints add honge)
@@ -221,6 +223,84 @@ export class ReportsModule {}
 
 Isse ye confirm hota hai ki [Step 4](#step-4-user-entity-banaya) me seekha gaya pattern — entity banao, `forRoot()` ke `entities` me global register karo, aur jis module ko uska repository chahiye usme `forFeature()` se import karo — **har entity ke liye repeat hota hai**, ye ek fixed recipe hai jo poore project me follow hoga.
 
+### Step 6: Signup Endpoint + Validation Setup
+
+Pehla real endpoint bana — `POST /auth/signup` — jisme ek DTO, validation, aur DB insert teeno jud kar kaam karte hain.
+
+**`user.dto.ts`** — request body ka expected shape aur uski validation rules define karta hai:
+
+```ts
+// users/user.dto.ts
+export class CreateUserDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  password!: string;
+}
+```
+
+**`main.ts`** — global `ValidationPipe` lagaya gaya taaki har route pe alag se validation lagane ki zaroorat na pade:
+
+```ts
+app.useGlobalPipes(
+  new ValidationPipe({
+    whitelist: true,
+  }),
+);
+```
+
+- **`ValidationPipe`** request aane par usse DTO ke decorators (`@IsEmail`, `@IsString`) ke against check karta hai — validation fail hote hi controller tak pahunche bina hi `400 Bad Request` return ho jaata hai.
+- **`whitelist: true`** DTO me define na kiye gaye extra fields (jo body me aaye but unpe koi decorator nahi hai) ko silently strip kar deta hai, error nahi deta.
+
+**`users.controller.ts`** — request receive karke `UsersService` ko delegate karta hai:
+
+```ts
+@Controller('auth')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Post('/signup')
+  create(@Body() bodyData: CreateUserDto) {
+    return this.usersService.create(bodyData.email, bodyData.password);
+  }
+}
+```
+
+**`users.service.ts`** — actual DB insert karta hai:
+
+```ts
+@Injectable()
+export class UsersService {
+  constructor(
+    @InjectRepository(User) private readonly repo: Repository<User>,
+  ) {}
+
+  create(email: string, password: string) {
+    const user = this.repo.create({ email, password });
+    return this.repo.save(user);
+  }
+}
+```
+
+- **`repo.create({ email, password })`** sirf ek **in-memory** `User` instance banata hai — DB me abhi kuch save nahi hota.
+- **`repo.save(user)`** asal me DB me `INSERT` query chalata hai, aur ek `Promise<User>` return karta hai jisme saved user (auto-generated `id` ke saath) hota hai.
+- Controller me `return this.usersService.create(...)` likhna zaroori tha — Nest is returned Promise ko khud resolve karke response body me bhej deta hai. Pehle `return` missing tha, isliye response khaali (`undefined`) jaata tha.
+
+**Ek gotcha jo yaha mila**: JSON body bhejte waqt (Postman/curl se) agar keys bina double-quotes ke likhi jaye (jaise JS object literal — `{ email: "x" }`), to Express ka body-parser fail ho jaata hai kyunki wo **strict JSON** parse karta hai (JS object syntax nahi):
+
+```json
+{
+  "statusCode": 400,
+  "message": "Expected property name or '}' in JSON at position 6 (line 2 column 5)",
+  "error": "Bad Request"
+}
+```
+
+Fix: har key ko double quotes me likho — `{ "email": "test@test.com", "password": "123456" }`. Ye error `ValidationPipe` se pehle hi aata hai, is liye DTO validation se koi lena dena nahi hai.
+
+**Floating promises**: `bootstrap()` aur controller ke `create()` dono async kaam karte hain jinke Promise ko explicitly handle na karne pe ESLint warning deta hai ("Promises must be awaited..."). Fix: jaha result chahiye wahan `return` karo (controller me), aur jaha result me interest nahi hai wahan `void` operator se explicitly ignore karo (`void bootstrap();`) — dono cases me ESLint ko pata chal jaata hai ki Promise jaan-bujh kar handle nahi ki gayi hai, accidentally nahi bhoola gaya.
+
 ---
 
 ## Concepts Glossary
@@ -246,3 +326,12 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`@Column()`** | [Step 4](#step-4-user-entity-banaya) | Class property ko ek normal DB column banata hai |
 | **Definite Assignment Assertion (`!`)** | [Step 4](#step-4-user-entity-banaya) | Property naam ke aage laga `!`, TypeScript ko batata hai ki value humne khud set nahi ki (yahan TypeORM runtime pe karega), isliye "not initialized" compile error na de |
 | **`TypeOrmModule.forRoot()` vs `forFeature()`** | [Step 4](#step-4-user-entity-banaya) | `forRoot()` poori app ke liye DB connection + global entity list define karta hai; `forFeature([Entity])` sirf us module ko us entity ka repository (DB query karne wala object) inject karne layak banata hai |
+| **DTO (`CreateUserDto`)** | [Step 6](#step-6-signup-endpoint--validation-setup) | Ek plain class jo request body ka expected shape define karti hai, aur `class-validator` decorators ke through validation rules bhi carry karti hai |
+| **`class-validator` decorators (`@IsEmail`, `@IsString`)** | [Step 6](#step-6-signup-endpoint--validation-setup) | DTO ki har property pe lagte hain, aur batate hain ki us field ki value kis format/type me honi chahiye |
+| **`ValidationPipe`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Incoming request body ko DTO ke validation rules ke against automatically check karta hai — fail hone par controller tak pahunche bina hi `400` return kar deta hai |
+| **`useGlobalPipes()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Ek pipe ko poori application ke har route pe apply karta hai, har controller me alag se lagane ki zaroorat nahi rehti |
+| **`whitelist: true`** | [Step 6](#step-6-signup-endpoint--validation-setup) | DTO me define na kiye gaye extra request body fields ko silently strip/remove kar deta hai |
+| **`@InjectRepository(Entity)`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Constructor parameter pe lagta hai, Nest ko batata hai ki us entity ka `Repository` yaha inject karo (`forFeature()` se available hua provider) |
+| **`repo.create()` vs `repo.save()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | `create()` sirf ek in-memory entity instance banata hai (DB me kuch nahi hota); `save()` asal me DB me insert/update query chalata hai aur Promise return karta hai |
+| **Floating Promise** | [Step 6](#step-6-signup-endpoint--validation-setup) | Jab ek async function ka returned Promise na `await` kiya jaye, na `return` kiya jaye, na `.catch()` laga ho — ESLint isse warning deta hai kyunki reject hone par error silently gum ho sakta hai; fix `return`, `await`, ya jaan-bujh kar `void` operator lagana hai |
+| **JSON.parse strictness** | [Step 6](#step-6-signup-endpoint--validation-setup) | Raw HTTP body ko JSON banane ke liye keys **double-quotes** me hona zaroori hai (JS object literal syntax jaise unquoted keys yaha invalid hain) — warna `ValidationPipe` tak pahunchne se pehle hi body-parser 400 de deta hai |
