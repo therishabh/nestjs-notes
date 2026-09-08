@@ -8,3 +8,33 @@ Content-Type: application/json
     "password": "fgfgfg"
 }
 
+
+### Find a particular user with ID
+GET http://localhost:3030/auth/1
+
+
+### Find all users with query params
+GET http://localhost:3030/auth
+
+
+### Update user info
+PATCH http://localhost:3030/auth/2
+Content-Type: application/json
+
+{
+    "email": "madhavi@gmail.com"
+}
+
+
+### Update user info
+PUT http://localhost:3030/auth/2
+Content-Type: application/json
+
+{
+    "email": "madhavi@gmail.com",
+    "password": "12345"
+}
+
+
+### Delete a particular user with ID
+DELETE http://localhost:3030/auth/1

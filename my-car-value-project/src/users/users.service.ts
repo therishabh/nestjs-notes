@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './user.entity';
-import { Repository } from 'typeorm';
+import { Like, Repository } from 'typeorm';
 
 // @Injectable() is class ko ek "provider" banata hai jise Nest ke DI container me
 // register kiya ja sakta hai (users.module.ts ke `providers` array me already registered hai)
@@ -52,8 +52,29 @@ export class UsersService {
   // Email ke basis pe user(s) dhoondta hai — `find()` hamesha **array** return karta hai
   // (chahe 0, 1, ya multiple matches mile), `findOne`/`findOneBy` ke ulat jo single record
   // (ya `null`) return karte hain. Isliye naam `find` hai, `findOne` nahi.
+  //
+  // Purana version — EXACT match karta tha (`email` column ki value bilkul is string ke
+  // barabar honi chahiye thi, e.g. sirf "test@x.com" pass karne pe hi match hota):
+  // find(email: string) {
+  //   return this.repo.find({ where: { email } });
+  // }
+
+  // Naya version — CONTAINS/partial match karta hai (SQL `LIKE '%value%'` jaisa) —
+  // ab agar koi bhi user ka email is substring ko kahi bhi contain karta hai to wo match hoga
+  // (e.g. `find('gmail')` un saare users ko return karega jinke email me "gmail" kahi bhi ho)
   find(email: string) {
-    return this.repo.find({ where: { email } });
+    // Like() TypeORM ka special "find operator" hai jo `where` clause me condition ko
+    // equality (`=`) ke bajaye SQL `LIKE` pattern me convert kar deta hai.
+    // `%` wildcard hai — "kuch bhi (ya kuch nahi) is jagah aa sakta hai" — dono taraf
+    // `%` lagane se "kahi bhi contain kare" wala behavior milta hai:
+    //   `%value`   → email `value` pe END hona chahiye
+    //   `value%`   → email `value` se START hona chahiye
+    //   `%value%`  → email me `value` KAHI BHI ho (yahi humein chahiye — "contains" search)
+    // Note: case-sensitivity DB engine pe depend karti hai — SQLite me `LIKE` by default
+    // ASCII case-insensitive hota hai, lekin Postgres/MySQL me case-sensitive ho sakta hai
+    // (waha `ILIKE` ya `LOWER()` use karna padta agar case-insensitive chahiye ho)
+    if (email) return this.repo.find({ where: { email: Like(`%${email}%`) } });
+    else return this.repo.find();
   }
 
   // Existing user ko partially update karta hai (e.g. sirf email badalna ho to poora
@@ -63,7 +84,7 @@ export class UsersService {
     // JS object pe naye fields merge karta hai, isliye base object (`user`) chahiye
     const user = await this.findOne(id);
     if (!user) {
-      throw new Error('user not found');
+      throw new NotFoundException('user not found');
     }
     // `attrs` me jo bhi fields aayi (e.g. `{ email: 'new@x.com' }`) unhe `user` object pe
     // overwrite kar deta hai — jo fields `attrs` me nahi hain wo `user` ki purani value pe hi rahengi
@@ -77,7 +98,7 @@ export class UsersService {
   async remove(id: number) {
     const user = await this.findOne(id);
     if (!user) {
-      throw new Error('user not found');
+      throw new NotFoundException('user not found');
     }
     // ---- repo.remove(entity) vs repo.delete(criteria) ----
     // Yaha jaan-bujh kar `repo.remove(user)` use kiya hai, `repo.delete(id)` nahi — dono me farak hai:

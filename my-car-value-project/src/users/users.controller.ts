@@ -1,5 +1,16 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { CreateUserDto } from './user.dto';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  Put,
+  Patch,
+  NotFoundException,
+} from '@nestjs/common';
+import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
 
 // @Controller('auth') is class ke saare routes ke aage `/auth` prefix laga deta hai
@@ -21,5 +32,32 @@ export class UsersController {
     // isliye yaha `return` kiya, taaki Nest is Promise ko resolve karke response body me
     // saved user (id ke saath) bhej de, warna client ko empty response milta
     return this.usersService.create(bodyData.email, bodyData.password);
+  }
+
+  @Get('/:id')
+  async findUser(@Param('id') id: string) {
+    const user = await this.usersService.findOne(parseInt(id));
+    if (!user) {
+      throw new NotFoundException('user not found');
+    }
+    return user;
+  }
+
+  @Get()
+  findAllUsers(@Query('email') email: string) {
+    return this.usersService.find(email);
+  }
+
+  @Put('/:id')
+  updateUserCompleteInfo(
+    @Param('id') id: string,
+    @Body() bodyData: UpdateUserDto,
+  ) {
+    return this.usersService.update(parseInt(id), bodyData);
+  }
+
+  @Delete('/:id')
+  removeUser(@Param('id') id: string) {
+    return this.usersService.remove(parseInt(id));
   }
 }

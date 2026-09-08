@@ -16,6 +16,8 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 6: Signup Endpoint + Validation Setup](#step-6-signup-endpoint--validation-setup)
   - [Step 7: Find, Update, Remove Methods Add Kiye](#step-7-find-update-remove-methods-add-kiye)
   - [Step 8: Entity Lifecycle Hooks Add Kiye](#step-8-entity-lifecycle-hooks-add-kiye)
+  - [Step 9: Full CRUD REST Endpoints Banaye](#step-9-full-crud-rest-endpoints-banaye)
+  - [Step 10: Email Contains Search (`Like()`)](#step-10-email-contains-search-like)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -39,10 +41,11 @@ my-car-value-project/
     ├── app.controller.ts                # Default scaffold controller (GET /)
     ├── app.service.ts                   # Default scaffold service
     ├── users/
-    │   ├── users.controller.ts          # `/auth` prefix ke saare routes (e.g. POST /auth/signup)
-    │   ├── users.service.ts             # Users se related business logic — create/findOne/find/update/remove, sab TypeORM Repository se
+    │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup, get by id, list/search, update, delete
+    │   ├── users.service.ts             # Users se related business logic — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
-    │   ├── user.dto.ts                  # `CreateUserDto` — signup request body ka expected shape + class-validator rules
+    │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (saare fields optional) — request body shapes + class-validator rules
+    │   ├── request.http                 # Manual testing ke liye sample requests (VS Code REST Client extension se run hote hain)
     │   └── users.module.ts              # UsersController + UsersService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
         ├── reports.controller.ts        # `/reports` route ka entry point (abhi khaali, aage endpoints add honge)
@@ -383,6 +386,66 @@ logAfterRemove() {
 
 Isse ye pattern real-world me use hota hai: audit logging, cache invalidation, ya side-effects (jaise signup ke baad welcome email bhejna) — lekin dhyan rakhna zaroori hai ki agar tumhari team `repo.delete()`/`repo.update()` jaisi query-level shortcuts use karti hai to ye hooks silently skip ho jaayenge, jo ek common production bug source hai.
 
+### Step 9: Full CRUD REST Endpoints Banaye
+
+`UsersController` me baaki saare CRUD endpoints wire kiye — ab `UsersService` ke saare methods (`findOne`, `find`, `update`, `remove`) HTTP routes se accessible hain:
+
+```ts
+// users/users.controller.ts
+@Get('/:id')
+async findUser(@Param('id') id: string) {
+  const user = await this.usersService.findOne(parseInt(id));
+  if (!user) {
+    throw new NotFoundException('user not found');
+  }
+  return user;
+}
+
+@Get()
+findAllUsers(@Query('email') email: string) {
+  return this.usersService.find(email);
+}
+
+@Put('/:id')
+updateUserCompleteInfo(@Param('id') id: string, @Body() bodyData: UpdateUserDto) {
+  return this.usersService.update(parseInt(id), bodyData);
+}
+
+@Delete('/:id')
+removeUser(@Param('id') id: string) {
+  return this.usersService.remove(parseInt(id));
+}
+```
+
+Kuch decorators/concepts jo yaha naye hain:
+
+- **`@Param('id')`** — URL path ka dynamic segment (`/auth/:id` me `id`) extract karta hai. Route param **hamesha string** aata hai (URL text hi hoti hai), isliye `UsersService.findOne(id: number)` ko dene se pehle `parseInt(id)` se number me convert kiya.
+- **`@Query('email')`** — URL ke query string se value nikalta hai (e.g. `/auth?email=gmail` se `email = "gmail"` milta hai). `findAllUsers` isi se optional search term leta hai.
+- **`@Put('/:id')`** — REST convention me `PUT` **poora resource replace** karne ke liye hota hai (saare fields expected), jabki `PATCH` **partial update** ke liye hota hai. Yaha `UpdateUserDto` ke saare fields `@IsOptional()` hain, isliye technically ye zyada `PATCH`-jaisa behavior hai `PUT` route pe — real-world me `PUT` chahiye to poore required fields lene chahiye, ya route ko `PATCH` bana dena chahiye (`request.http` me ek `PATCH` example bhi hai, lekin abhi controller me uska koi `@Patch()` handler nahi hai — ye ek known gap hai).
+- **`NotFoundException`** — Nest ka built-in HTTP exception hai jo automatically `404` status code ke saath ek structured error response bhej deta hai (`{ statusCode: 404, message: '...', error: 'Not Found' }`). `UsersService` ke `update()`/`remove()` me bhi plain `Error` ki jagah ab yehi use ho raha hai, taaki "user not found" case sahi HTTP status (`404`) ke saath client ko mile — plain `Error` throw karne se Nest default `500 Internal Server Error` bhej deta, jo galat/misleading hota (client ki galti thi — galat `id`, server ki nahi).
+
+### Step 10: Email Contains Search (`Like()`)
+
+`UsersService.find()` pehle **exact match** karta tha — ab TypeORM ke `Like()` find-operator se **contains/partial match** kiya:
+
+```ts
+// Pehle — exact match
+find(email: string) {
+  return this.repo.find({ where: { email } });
+}
+
+// Ab — contains match
+find(email: string) {
+  if (email) return this.repo.find({ where: { email: Like(`%${email}%`) } });
+  else return this.repo.find();
+}
+```
+
+- **`Like()`** `where` clause ki condition ko equality (`=`) ke bajaye SQL `LIKE` pattern me convert kar deta hai.
+- **`%` wildcard** — "yaha kuch bhi (ya kuch nahi) ho sakta hai": `%value` = end me match, `value%` = start me match, `%value%` = **kahi bhi** match (yahi "contains" search chahiye tha).
+- **Case-sensitivity DB-dependent hai** — SQLite me `LIKE` by default ASCII case-insensitive hota hai, Postgres/MySQL me case-sensitive ho sakta hai (waha case-insensitive ke liye `ILIKE` ya `LOWER()` chahiye hota).
+- Agar `email` query param bilkul diya hi na ho (`undefined`/empty), to `Like('%%')` jaisi cheez banane ke bajaye seedha `this.repo.find()` (bina filter) call kiya — ye edge-case handling hai taaki `GET /auth` bina query ke saare users list kar sake.
+
 ---
 
 ## Concepts Glossary
@@ -422,6 +485,11 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`Object.assign(target, source)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `source` object ki properties `target` object pe copy/overwrite kar deta hai (aur `target` ko hi return karta hai) — partial updates apply karne ka common JS pattern |
 | **`repo.remove(entity)` vs `repo.delete(criteria)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `remove()` ko poora loaded entity chahiye, lifecycle hooks trigger karta hai, 2 DB calls lagte hain (SELECT + DELETE); `delete()` sirf id/criteria se seedha DELETE chalata hai (1 DB call), hooks trigger nahi karta, `DeleteResult` return karta hai entity ke bajaye |
 | **Entity Lifecycle Hooks (`@AfterInsert`, `@AfterUpdate`, `@AfterRemove`)** | [Step 8](#step-8-entity-lifecycle-hooks-add-kiye) | TypeORM khud call karta hai jab respective DB operation entity instance ke through complete ho — `save()`/`remove()` inhe trigger karte hain, `delete()`/`update(id, ...)` jaisi query-level shortcuts nahi karti |
+| **`@Param('name')`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | URL path ke dynamic segment (e.g. `/auth/:id`) ki value extract karta hai — value hamesha **string** hoti hai, number chahiye ho to manually convert karna padta hai |
+| **`@Query('name')`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | URL ke query string se value nikalta hai (e.g. `?email=x` se `x`) |
+| **`PUT` vs `PATCH`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | REST convention: `PUT` poora resource replace karta hai (saare fields expected), `PATCH` sirf diye gaye fields partially update karta hai |
+| **`NotFoundException`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | Nest ka built-in exception class jo throw hote hi automatically `404` status code ke saath structured error response bhej deta hai — plain `Error` throw karne se Nest default `500` bhej deta, jo galat status hota |
+| **`Like()` (TypeORM find operator)** | [Step 10](#step-10-email-contains-search-like) | `where` clause ki condition ko equality ke bajaye SQL `LIKE` pattern me convert karta hai — `%value%` se substring/"contains" search milta hai |
 
 ---
 

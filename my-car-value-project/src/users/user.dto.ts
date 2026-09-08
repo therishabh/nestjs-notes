@@ -1,10 +1,20 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
-import { IsEmail, IsString } from 'class-validator';
+import { IsEmail, IsOptional, IsString } from 'class-validator';
 
 export class CreateUserDto {
   @IsEmail()
   email!: string;
 
   @IsString()
+  password!: string;
+}
+
+export class UpdateUserDto {
+  @IsEmail()
+  @IsOptional()
+  email!: string;
+
+  @IsString()
+  @IsOptional()
   password!: string;
 }
