@@ -40,4 +40,68 @@ export class UsersService {
     //      jaaye, silently gum na ho (agar humne `return` na kiya hota to ye ek "floating promise" hota).
     return this.repo.save(user);
   }
+
+  // Ek user ko uske `id` se dhoondta hai — `findOneBy()` short-hand hai
+  // `find({ where: { id } })` ka, jab sirf ek simple equality condition check karni ho.
+  // Agar user na mile to `null` return karta hai (error throw nahi karta) —
+  // isi wajah `update()`/`remove()` me neeche explicit `if (!user)` check lagana pada.
+  findOne(id: number) {
+    return this.repo.findOneBy({ id });
+  }
+
+  // Email ke basis pe user(s) dhoondta hai — `find()` hamesha **array** return karta hai
+  // (chahe 0, 1, ya multiple matches mile), `findOne`/`findOneBy` ke ulat jo single record
+  // (ya `null`) return karte hain. Isliye naam `find` hai, `findOne` nahi.
+  find(email: string) {
+    return this.repo.find({ where: { email } });
+  }
+
+  // Existing user ko partially update karta hai (e.g. sirf email badalna ho to poora
+  // object dobara bhejne ki zaroorat nahi — isliye `Partial<User>` type use kiya hai)
+  async update(id: number, attrs: Partial<User>) {
+    // Pehle DB se current user fetch karna zaroori hai — `Object.assign()` ek existing
+    // JS object pe naye fields merge karta hai, isliye base object (`user`) chahiye
+    const user = await this.findOne(id);
+    if (!user) {
+      throw new Error('user not found');
+    }
+    // `attrs` me jo bhi fields aayi (e.g. `{ email: 'new@x.com' }`) unhe `user` object pe
+    // overwrite kar deta hai — jo fields `attrs` me nahi hain wo `user` ki purani value pe hi rahengi
+    Object.assign(user, attrs);
+    // save() yaha UPDATE chalayega (`INSERT` nahi), kyunki `user.id` already set hai
+    // (yehi wo "upsert-like" behavior hai jo Step 6 me `save()` ke baare me discuss kiya tha)
+    return this.repo.save(user);
+  }
+
+  // User delete karta hai — pehle DB se poora entity fetch karta hai, phir usse remove karta hai
+  async remove(id: number) {
+    const user = await this.findOne(id);
+    if (!user) {
+      throw new Error('user not found');
+    }
+    // ---- repo.remove(entity) vs repo.delete(criteria) ----
+    // Yaha jaan-bujh kar `repo.remove(user)` use kiya hai, `repo.delete(id)` nahi — dono me farak hai:
+    //
+    // `repo.remove(entity)`:
+    //   - Isse ek **poora loaded entity object** chahiye (isiliye upar pehle `findOne(id)` call kiya).
+    //   - TypeORM lifecycle hooks (`@BeforeRemove()`, `@AfterRemove()`, agar entity pe lagaye ho) trigger karta hai.
+    //   - Delete ke baad passed entity object ka `id` khud `undefined` set kar deta hai (in-memory).
+    //   - Thoda "expensive" hai kyunki 2 DB calls lagte hain — pehle SELECT (findOne), phir DELETE.
+    //   - Fayda: hume pata chal jaata hai user exist karta tha ya nahi (upar `if (!user)` check se),
+    //     aur agar entity pe koi custom "before delete" business logic ho to wo guaranteed chalegi.
+    //
+    // `repo.delete(criteria)` (agar use karte):
+    //   - Sirf `id` (ya koi bhi where-condition) chahiye — entity load karne ki zaroorat nahi,
+    //     isliye ek hi DB call (direct DELETE query) me kaam ho jaata — zyada efficient.
+    //   - Lifecycle hooks TRIGGER NAHI karta (kyunki TypeORM ke paas entity instance hi nahi hota).
+    //   - Return value `DeleteResult` (`{ affected: number }`) hota hai, poora entity nahi —
+    //     "user exist karta tha ya nahi" janne ke liye `affected === 0` check karna padta,
+    //     jo `findOne()`-based null check jitna direct/readable nahi hai.
+    //
+    // Yaha `remove()` isliye chuna gaya kyunki humein pehle se hi "user not found" case explicitly
+    // handle karna tha (better error message ke liye), to entity load to ho hi rahi thi —
+    // isliye `remove()` use karna natural fit tha. Agar sirf fast bulk-delete chahiye ho
+    // aur "not found" case ki fikar na ho, to `repo.delete(id)` zyada efficient choice hoti.
+    return this.repo.remove(user);
+  }
 }

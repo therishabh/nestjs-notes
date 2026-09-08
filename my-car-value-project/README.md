@@ -14,6 +14,8 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 4: User Entity Banaya](#step-4-user-entity-banaya)
   - [Step 5: Report Entity Banaya](#step-5-report-entity-banaya)
   - [Step 6: Signup Endpoint + Validation Setup](#step-6-signup-endpoint--validation-setup)
+  - [Step 7: Find, Update, Remove Methods Add Kiye](#step-7-find-update-remove-methods-add-kiye)
+  - [Step 8: Entity Lifecycle Hooks Add Kiye](#step-8-entity-lifecycle-hooks-add-kiye)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -38,8 +40,8 @@ my-car-value-project/
     ├── app.service.ts                   # Default scaffold service
     ├── users/
     │   ├── users.controller.ts          # `/auth` prefix ke saare routes (e.g. POST /auth/signup)
-    │   ├── users.service.ts             # Users se related business logic — `create()` DB me naya user insert karta hai
-    │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns)
+    │   ├── users.service.ts             # Users se related business logic — create/findOne/find/update/remove, sab TypeORM Repository se
+    │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
     │   ├── user.dto.ts                  # `CreateUserDto` — signup request body ka expected shape + class-validator rules
     │   └── users.module.ts              # UsersController + UsersService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
@@ -302,6 +304,85 @@ Fix: har key ko double quotes me likho — `{ "email": "test@test.com", "passwor
 
 **Floating promises**: `bootstrap()` aur controller ke `create()` dono async kaam karte hain jinke Promise ko explicitly handle na karne pe ESLint warning deta hai ("Promises must be awaited..."). Fix: jaha result chahiye wahan `return` karo (controller me), aur jaha result me interest nahi hai wahan `void` operator se explicitly ignore karo (`void bootstrap();`) — dono cases me ESLint ko pata chal jaata hai ki Promise jaan-bujh kar handle nahi ki gayi hai, accidentally nahi bhoola gaya.
 
+### Step 7: Find, Update, Remove Methods Add Kiye
+
+`UsersService` me baaki CRUD operations (**R**ead, **U**pdate, **D**elete) add kiye:
+
+```ts
+findOne(id: number) {
+  return this.repo.findOneBy({ id });
+}
+
+find(email: string) {
+  return this.repo.find({ where: { email } });
+}
+
+async update(id: number, attrs: Partial<User>) {
+  const user = await this.findOne(id);
+  if (!user) {
+    throw new Error('user not found');
+  }
+  Object.assign(user, attrs);
+  return this.repo.save(user);
+}
+
+async remove(id: number) {
+  const user = await this.findOne(id);
+  if (!user) {
+    throw new Error('user not found');
+  }
+  return this.repo.remove(user);
+}
+```
+
+- **`findOneBy({ id })` vs `find({ where: { email } })`** — `findOneBy`/`findOne` ek single record (ya `null`) return karta hai, jabki `find` hamesha ek **array** return karta hai (chahe 0, 1, ya multiple matches mile) — is liye `find(email)` conceptually "is email wale saare users" dhoondta hai, ek single user nahi.
+- **`update()`** pehle DB se current entity fetch karta hai (`findOne`), `Object.assign()` se naye `attrs` merge karta hai, phir `save()` karta hai — `save()` yaha `INSERT` nahi `UPDATE` chalata hai kyunki `user.id` already set hota hai (`save()` ka "upsert-like" behavior [Step 6](#step-6-signup-endpoint--validation-setup) me discuss ho chuka hai).
+- **`Partial<User>`** ek TypeScript utility type hai jo `User` ke saare properties ko **optional** bana deta hai — isse `update()` ko caller sirf wahi fields de sakta hai jo change karni hain (poora object dobara bhejne ki zaroorat nahi).
+
+**`remove()` me `repo.remove(user)` use kiya, `repo.delete(id)` nahi — dono me farak kya hai?**
+
+Ye do alag TypeORM methods hain jo dikhne me similar lagte hain but different tareeke se kaam karte hain:
+
+| | `repo.remove(entity)` | `repo.delete(criteria)` |
+| --- | --- | --- |
+| Input kya chahiye | Poora **loaded entity object** (pehle `findOne()` se fetch karna padta hai) | Sirf `id` ya koi bhi where-condition — entity load karne ki zaroorat nahi |
+| DB calls | 2 (pehle SELECT fetch, phir DELETE) | 1 (direct DELETE query) |
+| Lifecycle hooks (`@BeforeRemove`, `@AfterRemove`) | **Trigger hote hain** | **Trigger nahi hote** (TypeORM ke paas entity instance hi nahi hota) |
+| Return value | Deleted entity object (jiska `id` ab `undefined` set ho jaata hai) | `DeleteResult` — `{ affected: number }` |
+| "User exist karta tha?" pata chalta hai kaise | `findOne()` ke `null` check se pehle hi pata chal jaata hai | `affected === 0` check karna padta hai baad me |
+
+Is project me `remove()` isliye chuna gaya kyunki "user not found" case ko **explicitly, readable error ke saath** handle karna tha — us case me entity load karna to hoga hi, isliye `repo.remove()` natural fit tha. Agar sirf fast bulk-delete chahiye hota aur "not found" ki fikar na hoti, to `repo.delete(id)` zyada **efficient** choice hoti (ek hi DB round-trip me kaam ho jaata, entity fetch karne ki zaroorat nahi padti).
+
+### Step 8: Entity Lifecycle Hooks Add Kiye
+
+`User` entity me TypeORM ke **lifecycle hooks** (aka "entity listeners") add kiye — ye methods TypeORM khud call karta hai jab respective DB operation successfully complete ho jaaye:
+
+```ts
+// users/user.entity.ts
+@AfterInsert()
+logAfterInsert() {
+  console.log('User Inserted with ID : ', this.id);
+}
+
+@AfterUpdate()
+logAfterUpdate() {
+  console.log('User updated successfully with ID : ', this.id);
+}
+
+@AfterRemove()
+logAfterRemove() {
+  console.log('User Removed with ID : ', this.id);
+}
+```
+
+**Sabse important cheez jo yaha samajhni hai**: ye hooks sirf tabhi trigger hote hain jab operation **entity instance ke through** ho —
+
+- `repo.save()` → `@AfterInsert()`/`@AfterUpdate()` trigger karta hai (kyunki ye ek loaded/created entity object pe kaam karta hai).
+- `repo.remove()` → `@AfterRemove()` trigger karta hai (kyunki ismein bhi poora entity object pass hota hai — [Step 7](#step-7-find-update-remove-methods-add-kiye) me isi wajah se `remove()` use kiya gaya tha).
+- `repo.delete(id)` / `repo.update(id, ...)` → **koi hook trigger nahi karte**, kyunki ye sirf ek query-level `criteria` (jaise `id`) leke seedha SQL chalate hain, TypeORM ke paas kabhi actual entity instance banta hi nahi.
+
+Isse ye pattern real-world me use hota hai: audit logging, cache invalidation, ya side-effects (jaise signup ke baad welcome email bhejna) — lekin dhyan rakhna zaroori hai ki agar tumhari team `repo.delete()`/`repo.update()` jaisi query-level shortcuts use karti hai to ye hooks silently skip ho jaayenge, jo ek common production bug source hai.
+
 ---
 
 ## Concepts Glossary
@@ -336,6 +417,11 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`repo.create()` vs `repo.save()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | `create()` sirf ek in-memory entity instance banata hai (DB me kuch nahi hota); `save()` asal me DB me insert/update query chalata hai aur Promise return karta hai |
 | **Floating Promise** | [Step 6](#step-6-signup-endpoint--validation-setup) | Jab ek async function ka returned Promise na `await` kiya jaye, na `return` kiya jaye, na `.catch()` laga ho — ESLint isse warning deta hai kyunki reject hone par error silently gum ho sakta hai; fix `return`, `await`, ya jaan-bujh kar `void` operator lagana hai |
 | **JSON.parse strictness** | [Step 6](#step-6-signup-endpoint--validation-setup) | Raw HTTP body ko JSON banane ke liye keys **double-quotes** me hona zaroori hai (JS object literal syntax jaise unquoted keys yaha invalid hain) — warna `ValidationPipe` tak pahunchne se pehle hi body-parser 400 de deta hai |
+| **`findOneBy()`/`findOne` vs `find()`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `findOneBy`/`findOne` ek single record (ya `null`) return karta hai; `find` hamesha ek **array** return karta hai, chahe 0, 1, ya multiple matches mile |
+| **`Partial<Entity>` (TS utility type)** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | Kisi bhi type ke saare properties ko **optional** bana deta hai — `update()` jaise methods me use hota hai jaha caller sirf wahi fields de jo change karni hain |
+| **`Object.assign(target, source)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `source` object ki properties `target` object pe copy/overwrite kar deta hai (aur `target` ko hi return karta hai) — partial updates apply karne ka common JS pattern |
+| **`repo.remove(entity)` vs `repo.delete(criteria)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `remove()` ko poora loaded entity chahiye, lifecycle hooks trigger karta hai, 2 DB calls lagte hain (SELECT + DELETE); `delete()` sirf id/criteria se seedha DELETE chalata hai (1 DB call), hooks trigger nahi karta, `DeleteResult` return karta hai entity ke bajaye |
+| **Entity Lifecycle Hooks (`@AfterInsert`, `@AfterUpdate`, `@AfterRemove`)** | [Step 8](#step-8-entity-lifecycle-hooks-add-kiye) | TypeORM khud call karta hai jab respective DB operation entity instance ke through complete ho — `save()`/`remove()` inhe trigger karte hain, `delete()`/`update(id, ...)` jaisi query-level shortcuts nahi karti |
 
 ---
 
@@ -392,6 +478,13 @@ async createUserWithReport(email: string, password: string) {
   });
 }
 ```
+
+**Q: `repo.remove(entity)` aur `repo.delete(criteria)` me kya farak hai — kab kya use karoge?**
+Dono record delete karte hain but different tareeke se:
+- **`remove(entity)`** — ek **poora loaded entity object** leta hai (pehle DB se fetch karna padta hai, e.g. `findOne()` se), 2 DB calls lagte hain (SELECT + DELETE), aur TypeORM lifecycle hooks (`@BeforeRemove()`, `@AfterRemove()`) trigger karta hai. Delete ke baad passed object ka `id` `undefined` ho jaata hai.
+- **`delete(criteria)`** — sirf `id` ya kisi bhi where-condition se seedha delete karta hai, entity load karne ki zaroorat nahi, sirf **1 DB call**, isliye zyada efficient. Lifecycle hooks trigger nahi karta (kyunki entity instance exist hi nahi karta). Return value `DeleteResult` (`{ affected: number }`) hota hai, poora entity nahi.
+
+**Kab kya:** agar delete se pehle "record exist karta hai ya nahi" explicitly check karna hai (readable error dena hai), ya lifecycle hooks chalne zaroori hain, to `remove()` use karo — entity to load ho hi rahi hai us case me. Agar sirf fast bulk-delete karna hai aur existence-check ki fikar nahi (ya `affected` count se hi kaam chal jaata hai), to `delete()` zyada efficient hai kyunki ek extra SELECT query bachti hai. Isi project ke `UsersService.remove()` me `remove()` isliye use hua kyunki "user not found" case explicitly handle karna tha.
 
 ### Validation & DTOs
 
