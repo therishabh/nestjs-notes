@@ -15,6 +15,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 5: Report Entity Banaya](#step-5-report-entity-banaya)
   - [Step 6: Signup Endpoint + Validation Setup](#step-6-signup-endpoint--validation-setup)
 - [Concepts Glossary](#concepts-glossary)
+- [Interview Prep — Q&A](#interview-prep--qa)
 
 ## App Overview
 
@@ -335,3 +336,74 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`repo.create()` vs `repo.save()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | `create()` sirf ek in-memory entity instance banata hai (DB me kuch nahi hota); `save()` asal me DB me insert/update query chalata hai aur Promise return karta hai |
 | **Floating Promise** | [Step 6](#step-6-signup-endpoint--validation-setup) | Jab ek async function ka returned Promise na `await` kiya jaye, na `return` kiya jaye, na `.catch()` laga ho — ESLint isse warning deta hai kyunki reject hone par error silently gum ho sakta hai; fix `return`, `await`, ya jaan-bujh kar `void` operator lagana hai |
 | **JSON.parse strictness** | [Step 6](#step-6-signup-endpoint--validation-setup) | Raw HTTP body ko JSON banane ke liye keys **double-quotes** me hona zaroori hai (JS object literal syntax jaise unquoted keys yaha invalid hain) — warna `ValidationPipe` tak pahunchne se pehle hi body-parser 400 de deta hai |
+
+---
+
+## Interview Prep — Q&A
+
+Ye project me jo concepts practically use kiye, unpe based common interview questions — taaki sirf "code likh diya" na ho, balki "kyun likha aur alternative kya the" bhi explain kar sako.
+
+### NestJS Core / Dependency Injection
+
+**Q: Dependency Injection kya hai aur NestJS isse kaise implement karta hai?**
+DI ek design pattern hai jisme koi class apni dependencies khud `new` nahi karti, balki bahar se (constructor ke through) receive karti hai. NestJS ke paas ek built-in **DI container/IoC container** hai jo `@Injectable()` classes ko track karta hai aur jab kisi constructor me wo class maangi jaati hai, khud instance bana kar (ya already-bani instance reuse karke) inject kar deta hai. Fayda: **loose coupling** (classes ek doosre ke concrete implementation pe depend nahi karti) aur **testability** (test me real dependency ki jagah mock inject kar sakte ho).
+
+**Q: `@Module()`, `@Controller()`, `@Injectable()` — teeno me kya farak hai?**
+- `@Module()` — ek feature ko group karta hai (`controllers`, `providers`, `imports`, `exports`).
+- `@Controller()` — HTTP requests handle karta hai, routes define karta hai.
+- `@Injectable()` — class ko DI container me register hone layak "provider" banata hai (services, repositories, guards, etc. sab isi se marked hote hain).
+
+**Q: `imports` aur `exports` array ka kya role hai?**
+`providers` array me register hui koi bhi cheez by default sirf usi module ke andar visible hoti hai. Doosre module use tabhi kar sakte hain jab: (1) provider wale module ne usse `exports` array me daala ho, AND (2) use karne wale module ne us provider-wale module ko `imports` me liya ho. Isi project me [Step 2](#step-2-users-aur-reports-modules-banaye) me ye dikhaya gaya — `UsersModule`/`ReportsModule` root `AppModule` ke `imports` me hain.
+
+**Q: Default provider scope kya hota hai?**
+**Singleton** — chahe provider kitne bhi modules me import ho, poori application lifetime me uska sirf **ek** instance banta hai (jab tak explicitly `Scope.REQUEST` ya `Scope.TRANSIENT` na diya jaaye).
+
+### TypeORM
+
+**Q: `TypeOrmModule.forRoot()` aur `forFeature()` me kya farak hai?**
+`forRoot()` sirf **ek baar**, root module me, DB connection banata hai aur global entity list define karta hai. `forFeature([Entity])` **per-module** hota hai — ye us module ke DI container me `Repository<Entity>` provider register karta hai, taaki wahi module `@InjectRepository(Entity)` use kar sake. `forRoot()` na ho to connection hi nahi banega; `forFeature()` na ho to us particular module me repository inject nahi hogi (chahe entity globally registered ho).
+
+**Q: `repo.create()` aur `repo.save()` me kya farak hai?**
+`create()` sirf ek **in-memory** entity instance banata hai — **synchronous** hai, koi DB call nahi hoti, `id` abhi `undefined` hota hai. `save()` **asynchronous** hai (`Promise` return karta hai), aur actual DB query chalata hai: agar entity ke paas `id` nahi hai to `INSERT`, agar hai to `UPDATE` — isliye `save()` create aur update dono handle kar sakta hai. `repo.create()` use karna best practice hai (`new Entity()` ke bajaye) kyunki isse entity ke lifecycle hooks (`@BeforeInsert()`, etc.) sahi se trigger hote hain.
+
+**Q: `synchronize: true` production me kyun risky hai?**
+Ye TypeORM ko entities dekh kar khud DB schema (tables/columns) create/alter/drop karne deta hai. Dev me convenient hai (schema hamesha entities se match karta hai), lekin production me agar koi column rename/remove ho jaaye to TypeORM us column ko drop kar sakta hai — **accidental data loss**. Production me iski jagah **migrations** (versioned, reviewable SQL scripts) use karni chahiye.
+
+**Q: ORM (jaise TypeORM) use karne ka fayda/nuksaan kya hai?**
+Fayda: raw SQL likhne ki zaroorat kam ho jaati hai, type-safety milti hai (TS classes = tables), database switch karna aasan hota hai (SQLite se Postgres). Nuksaan: complex/optimized queries ke liye ORM ka generated SQL kabhi inefficient ho sakta hai, aur ORM ka apna learning curve/abstraction overhead hota hai.
+
+### Validation & DTOs
+
+**Q: DTO (Data Transfer Object) kya hota hai aur kyun use karte hain?**
+DTO ek plain class hai jo define karti hai ki ek request/response me data ka **shape** kya hona chahiye. Isse (1) TypeScript type-safety milti hai controller me, aur (2) `class-validator` decorators laga kar us shape ko **runtime pe bhi validate** kar sakte hain (TypeScript types sirf compile-time pe check hote hain, runtime pe koi bhi JSON aa sakta hai — DTO+ValidationPipe ye gap fill karte hain).
+
+**Q: `ValidationPipe` ka `whitelist: true` kya karta hai, aur `forbidNonWhitelisted` se kaise alag hai?**
+`whitelist: true` DTO me define na kiye extra fields ko **silently strip** kar deta hai. `forbidNonWhitelisted: true` (agar saath me lagaya jaaye) unhi extra fields ko strip karne ke bajaye **400 error throw** kar deta hai. Dono alag-alag trade-off dete hain — chup-chaap ignore karna vs explicitly reject karna.
+
+**Q: Pipe kya hota hai NestJS me?**
+Pipe ek class hai jo request handler (controller method) chalne se **pehle** input data ko transform ya validate karti hai. `ValidationPipe` inbuilt example hai — Nest ke request lifecycle me ye order hota hai: **Middleware → Guard → Interceptor (pre) → Pipe → Controller Handler → Interceptor (post) → Exception Filter (agar error aaya)**.
+
+### JavaScript / TypeScript Fundamentals
+
+**Q: Promise ke bina `await`/`return`/`.catch()` ke chhod dena kyun bura hai ("floating promise")?**
+Agar us Promise ke andar error/rejection aaya (jaise DB insert fail hua), to wo error **silently swallow** ho jaata hai — na kahi log hota hai, na caller ko pata chalta hai. Fix: ya to `await` karo (result chahiye), ya `return` karo (upar propagate karna hai), ya explicitly `void` operator se ignore karo (jaan-bujh kar fire-and-forget), ya `.catch()` laga kar error handle karo.
+
+**Q: Definite assignment assertion (`!`) TypeScript me kya karta hai, aur `?` se kaise alag hai?**
+`!` (e.g. `id!: number`) compiler ko bolta hai "ye property zaroor assign hogi (runtime pe), compile-time check mat karo" — property ka type non-nullable rehta hai. `?` (e.g. `id?: number`) property ko **optional** banata hai — uska type automatically `number | undefined` ho jaata hai, aur usse access karne se pehle check karna padta hai. TypeORM entities me `!` isliye use hota hai kyunki ORM khud (constructor ke bahar) properties populate karta hai.
+
+### Dependency Management
+
+**Q: Agar kisi library ka type error/runtime error samajh na aaye to sabse pehle kya check karoge?**
+**Installed version compatible hai ya nahi.** Isi project me [Step 3](#step-3-typeorm--sqlite-setup-kiya) me `typeorm@1.1.1` install ho gaya tha jabki `@nestjs/typeorm@12` ko `typeorm@0.3.x` chahiye tha — error TypeScript ka tha (`type: 'sqlite'` assignable nahi), lekin root cause `package.json` ka version mismatch tha, code me kuch galat nahi tha.
+
+### Aage Explore Karne Layak Topics (is project me abhi cover nahi hue)
+
+Interview me aksar in per bhi pucha jaata hai — abhi is project me implement nahi kiye, lekin concept jaanna zaroori hai:
+
+- **Guards** — route access control (e.g. `AuthGuard` — logged-in user hi access kar sake).
+- **Interceptors** — response transform karna, logging, caching (request ke pehle aur baad dono me chal sakte hain).
+- **Exception Filters** — errors ko custom format me catch/handle karna (`@Catch()`).
+- **Middleware** — Express-level, route handler se bhi pehle chalta hai (e.g. logging, cookie parsing).
+- **Custom Decorators** (`@CurrentUser()` jaisa) — repetitive logic ko ek decorator me wrap karna.
+- **Password Hashing** — abhi `password` plain text store ho raha hai, real app me `bcrypt`/`argon2` se hash hona chahiye — is project ka ek known gap hai jo aage fix hoga.
