@@ -21,6 +21,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 11: Response Serialization with Interceptor](#step-11-response-serialization-with-interceptor)
   - [Step 12: Reusable `Serialize()` Decorator Banaya](#step-12-reusable-serialize-decorator-banaya)
   - [Step 13: AuthService — Password Hashing](#step-13-authservice--password-hashing)
+  - [Step 14: `bcrypt` se Password Hashing (Learning Demo)](#step-14-bcrypt-se-password-hashing-learning-demo)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -49,6 +50,7 @@ my-car-value-project/
     │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup (AuthService ko delegate), get by id, list/search, update, delete
     │   ├── users.service.ts             # Users se related PLAIN DB CRUD — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
     │   ├── auth.service.ts              # Signup workflow — duplicate-email check + scrypt password hashing, phir UsersService.create() ko delegate karta hai
+    │   ├── bcrypt-auth.service.ts       # Learning demo — `bcrypt` library se hash/compare (koi controller isse abhi use nahi karta)
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
     │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (partial update) + `UserDto` (safe response shape, password exclude) — sab request/response shapes
     │   ├── request.http                 # Manual testing ke liye sample requests (VS Code REST Client extension se run hote hain)
@@ -597,6 +599,45 @@ create(@Body() bodyData: CreateUserDto) {
 }
 ```
 
+### Step 14: `bcrypt` se Password Hashing (Learning Demo)
+
+Step 13 me hand-rolled `crypto.scrypt` se hashing implement ki thi. Us cheez ko industry-standard `bcrypt` library se **compare** karke seekhne ke liye ek naya **`BcryptAuthService`** banaya — ye abhi koi route use nahi karta, sirf side-by-side dekhne ke liye hai ki dono approaches me kya farak hai.
+
+Pehle package install kiya:
+
+```bash
+npm install bcrypt
+npm install -D @types/bcrypt
+```
+
+```ts
+// users/bcrypt-auth.service.ts
+@Injectable()
+export class BcryptAuthService {
+  private readonly saltRounds = 10;
+
+  async hashPassword(plainPassword: string): Promise<string> {
+    return bcrypt.hash(plainPassword, this.saltRounds);
+  }
+
+  async comparePassword(plainPassword: string, storedHash: string): Promise<boolean> {
+    return bcrypt.compare(plainPassword, storedHash);
+  }
+}
+```
+
+**`scrypt` (Step 13) vs `bcrypt` (Step 14) — practical farak:**
+
+| | Hand-rolled `crypto.scrypt` (Step 13) | `bcrypt` library (Step 14) |
+| --- | --- | --- |
+| Salt generate karna | Manually (`randomBytes(8)`) | `bcrypt.hash()` khud internally karta hai |
+| Salt store karna | Manually string-join karna padta (`salt + '.' + hash`) | Automatically ek single self-describing string me embedded (`$2b$10$...`) |
+| Cost factor | Hardcoded/implicit (`scrypt(password, salt, 32)`) | Explicit `saltRounds` (10-12 industry-standard), khud output string me encoded |
+| Verify karna | Manually salt nikaalo → dobara hash karo → string compare karo | `bcrypt.compare()` — ek call me sab handle |
+| Timing-attack safety | Manual comparison likhoge to risk hai | `bcrypt.compare()` khud constant-time compare karta hai |
+
+**Sabse important seekh**: `bcrypt` ka output format (`$2b$10$<22-char-salt><31-char-hash>`) **self-describing** hai — algorithm version (`2b`), cost factor (`10`), aur salt sab usi string me embedded hain. Isse agar kal cost factor 10 se 12 badal do, purane hashes (jo `$2b$10$...` se start hote hain) bhi bina kisi problem ke verify ho payenge, kyunki `bcrypt.compare()` stored hash se hi cost/salt padh leta hai — hume kahi alag se track nahi karna padta ki kaunsa hash kis config se bana tha.
+
 ---
 
 ## Concepts Glossary
@@ -651,6 +692,9 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **Salt (password hashing)** | [Step 13](#step-13-authservice--password-hashing) | Har user ke liye generate hone wala ek random unique string, jo hash se pehle password ke saath mix hota hai — same password wale users ka bhi final hash alag banata hai, rainbow-table attacks se bachata hai | [`057e8ec`](https://github.com/therishabh/nestjs-notes/commit/057e8ec) |
 | **`scrypt` (key derivation function)** | [Step 13](#step-13-authservice--password-hashing) | Jaan-bujh kar slow/memory-intensive banaya gaya hashing algorithm (bcrypt/argon2 jaisa) — brute-force attacks ko expensive banata hai; fast hash functions (MD5/SHA-256) password hashing ke liye unsafe hote hain | [`057e8ec`](https://github.com/therishabh/nestjs-notes/commit/057e8ec) |
 | **`BadRequestException`** | [Step 13](#step-13-authservice--password-hashing) | Nest ka built-in exception jo `400` status ke saath structured error deta hai — client-side galti (yaha: duplicate email) ke liye use hota hai | [`057e8ec`](https://github.com/therishabh/nestjs-notes/commit/057e8ec) |
+| **`bcrypt.hash(pw, saltRounds)`** | [Step 14](#step-14-bcrypt-se-password-hashing-learning-demo) | Salt generate + hashing dono ek call me karta hai, aur ek self-describing string return karta hai (`$2b$10$...`) jisme algorithm version, cost, salt, hash sab embedded hote hain | {{STEP14_COMMIT}} |
+| **`bcrypt.compare(pw, hash)`** | [Step 14](#step-14-bcrypt-se-password-hashing-learning-demo) | Stored hash se salt/cost khud nikaal kar plain password ko dobara hash karta hai aur constant-time (timing-attack-safe) compare karta hai | {{STEP14_COMMIT}} |
+| **Salt Rounds / Cost Factor** | [Step 14](#step-14-bcrypt-se-password-hashing-learning-demo) | Batata hai kitne hashing rounds chalenge (`2^saltRounds`) — jitna zyada utna slow/secure; 10-12 industry-standard hai | {{STEP14_COMMIT}} |
 
 ---
 
@@ -765,6 +809,12 @@ Salt ek random, per-user unique string hai jo hash banane se pehle password ke s
 
 **Q: `scrypt`/`bcrypt` jaise algorithms MD5/SHA-256 se password hashing ke liye better kyun hain?**
 MD5/SHA-256 **fast** hone ke liye design kiye gaye hain (checksums/integrity ke liye) — yehi cheez password hashing ke liye **bura** hai, kyunki attacker bhi utni hi fast speed se brute-force try kar sakta hai (modern GPU se billions/second). `scrypt`/`bcrypt`/`argon2` jaan-bujh kar **slow aur memory-intensive** design kiye gaye hain, taaki ek single guess try karna bhi expensive ho — isse brute-force attack practically infeasible ho jaata hai.
+
+**Q: Hand-rolled `crypto.scrypt` (Step 13) ke bajaye `bcrypt`/`argon2` library (Step 14) use karna better kyun hai?**
+Concept level pe dono sahi hain (dono slow hashing + salt use karte hain), lekin library use karna practically safer hai kyunki: (1) salt generation, embedding, aur verification ka **error-prone manual code** khud nahi likhna padta (ek chhoti si galti — salt length, delimiter mismatch — security hole ban sakti hai), (2) output format **self-describing** hota hai (`bcrypt` ka `$2b$10$...` string me algorithm version + cost + salt sab embedded hain), isliye cost factor badalne pe purane hashes bhi bina extra migration-tracking ke verify hote rehte hain, aur (3) library **battle-tested** hoti hai (millions of production apps me use ho chuki, edge cases already handle kiye gaye). Industry me `bcrypt` sabse common hai, aur `argon2` (Password Hashing Competition 2015 winner) abhi OWASP ki top recommendation hai.
+
+**Q: `bcrypt.compare()` internally kaam kaise karta hai, jab humne ise salt separately nahi diya?**
+`bcrypt.hash()` ka output string (`$2b$10$<salt><hash>`) me salt already embedded hota hai. `bcrypt.compare(plainPassword, storedHash)` call karte hi bcrypt khud us `storedHash` string ko parse karke salt aur cost factor nikal leta hai, `plainPassword` ko usi salt+cost se dobara hash karta hai, aur phir dono hashes ko **constant-time** compare karta hai (taaki timing-attack se pata na chale ki comparison kitni jaldi fail hui — jo indirectly password ke sahi characters reveal kar sakta hai).
 
 ### Dependency Management
 
