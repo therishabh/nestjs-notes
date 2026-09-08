@@ -20,6 +20,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 10: Email Contains Search (`Like()`)](#step-10-email-contains-search-like)
   - [Step 11: Response Serialization with Interceptor](#step-11-response-serialization-with-interceptor)
   - [Step 12: Reusable `Serialize()` Decorator Banaya](#step-12-reusable-serialize-decorator-banaya)
+  - [Step 13: AuthService — Password Hashing](#step-13-authservice--password-hashing)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -45,12 +46,13 @@ my-car-value-project/
     ├── interceptors/
     │   └── serialize.interceptor.ts     # `SerializeInterceptor` (reusable, DTO constructor-param leta hai) + `Serialize()` decorator factory — response ko target DTO shape me convert karta hai (password chhupane ke liye)
     ├── users/
-    │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup, get by id, list/search, update, delete
-    │   ├── users.service.ts             # Users se related business logic — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
+    │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup (AuthService ko delegate), get by id, list/search, update, delete
+    │   ├── users.service.ts             # Users se related PLAIN DB CRUD — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
+    │   ├── auth.service.ts              # Signup workflow — duplicate-email check + scrypt password hashing, phir UsersService.create() ko delegate karta hai
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
     │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (partial update) + `UserDto` (safe response shape, password exclude) — sab request/response shapes
     │   ├── request.http                 # Manual testing ke liye sample requests (VS Code REST Client extension se run hote hain)
-    │   └── users.module.ts              # UsersController + UsersService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
+    │   └── users.module.ts              # UsersController + UsersService + AuthService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
         ├── reports.controller.ts        # `/reports` route ka entry point (abhi khaali, aage endpoints add honge)
         ├── reports.service.ts           # Reports se related business logic (abhi khaali)
@@ -551,55 +553,104 @@ findAllUsers(@Query('email') email: string) { ... }
 
 **Baaki gaps abhi bhi hain** (jaan-bujh kar is project ka aage ka scope): `create`, `update`, `remove` routes pe abhi `@Serialize()` nahi lagaya, isliye unka response abhi bhi raw entity hi hai. Real app me poore controller pe class-level `@Serialize(UserDto)` laga dena zyada consistent hota.
 
+### Step 13: AuthService — Password Hashing
+
+Ab tak `password` **plain text** me DB me store ho raha tha (README ke shuru se hi ye known gap ke roop me note tha). Fix karne ke liye ek naya **`AuthService`** banaya, jo signup ka poora workflow (duplicate-email check + hashing) handle karta hai:
+
+```ts
+// users/auth.service.ts
+@Injectable()
+export class AuthService {
+  constructor(private readonly usersService: UsersService) {}
+
+  async signup(email: string, password: string) {
+    const user = await this.usersService.find(email);
+    if (user.length) {
+      throw new BadRequestException('Email id already exist');
+    }
+
+    const salt = randomBytes(8).toString('hex');
+    const hash = (await scrypt(password, salt, 32)) as Buffer;
+    const encryptedPassword = salt + '.' + hash.toString('hex');
+
+    return this.usersService.create(email, encryptedPassword);
+  }
+}
+```
+
+Kuch important design decisions:
+
+- **`AuthService` alag kyun banaya, `UsersService` me hi kyun nahi daala?** — `UsersService` ko jaan-bujh kar **plain DB CRUD** tak limited rakha gaya (Single Responsibility Principle) — usse sirf ye pata hai "DB me kaise save/find/update/delete karna hai". `AuthService` ek **higher-level workflow** hai jo business rules (duplicate check, hashing) apply karke phir `UsersService` (DB layer) ko use karta hai. Isse `UsersService` reusable rehta hai — koi bhi doosra feature (jo hashing na chahta ho) bhi seedha `UsersService` use kar sakta hai.
+- **Duplicate email check** — `usersService.find(email)` (jo Step 10 me "contains" search bana diya tha) yaha exact email se call hota hai, aur agar result array khaali nahi (`user.length`), to `BadRequestException` (`400`) throw hota hai.
+- **`promisify()`** — Node ka built-in `crypto.scrypt` callback-based API hai, `Promise` return nahi karta. `util.promisify()` isse ek Promise-returning function me convert kar deta hai, taaki `await scrypt(...)` likha ja sake.
+- **Salt** — har user ke liye ek **random, unique** string generate hoti hai (`randomBytes(8)`). Isse same password wale do users ka bhi final hash **alag** ban jaata hai, jo "rainbow table" attacks (precomputed hash lookup) ko fail kar deta hai.
+- **`scrypt`** — ek **"key derivation function"** (bcrypt/argon2 jaisa) hai jo jaan-bujh kar slow/memory-intensive design ki gayi hai, taaki brute-force attacks expensive ho jaayein. Fast hash functions (MD5, SHA-256) **password hashing ke liye unsafe** hain, kyunki wo bahut fast brute-force ho sakte hain.
+- **`salt + '.' + hash`** — salt ko hash ke saath **plain text me hi** store kiya jaata hai (`encryptedPassword` string me), kyunki login ke time verify karne ke liye wahi salt dobara chahiye hoga. Salt secret nahi hota, sirf **unique** hona chahiye.
+
+**`users.controller.ts`** — signup route ab `usersService.create()` ki jagah `authService.signup()` ko delegate karta hai; controller ko iske internal detail (hashing kaise ho rahi hai) se koi matlab nahi:
+
+```ts
+@Post('/signup')
+@Serialize(UserDto)
+create(@Body() bodyData: CreateUserDto) {
+  return this.authService.signup(bodyData.email, bodyData.password);
+}
+```
+
 ---
 
 ## Concepts Glossary
 
 Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short reference yahan hai — kisi bhi cheez ka matlab bhoolo to yahan dekh lo.
 
-| Concept | Kahan use hua | Iska matlab |
-| --- | --- | --- |
-| **Nest CLI** (`nest new`) | [Step 1](#step-1-project-generate-kiya) | Boilerplate project scaffold karne ka tool — module/controller/service ka default setup auto-generate karta hai |
-| **Nest CLI Schematics** (`nest g module/controller/service`) | [Step 2](#step-2-users-aur-reports-modules-banaye) | Ek command se ek feature ke liye module + controller + service teeno files aur unka boilerplate wiring auto-generate karta hai |
-| **Feature Module** | [Step 2](#step-2-users-aur-reports-modules-banaye) | Ek specific domain/feature (yahan `users`, `reports`) ke controllers aur providers ko apne andar group karne wala module |
-| **`@Controller('prefix')`** | [Step 2](#step-2-users-aur-reports-modules-banaye) | Class ko HTTP routes handle karne wala controller banata hai, aur uske saare routes ke aage `prefix` add karta hai (e.g. `/users`) |
-| **TypeORM** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Node.js/TypeScript ka ORM (Object-Relational Mapper) — DB tables ko JS/TS classes (entities) ke through manage karne deta hai, raw SQL likhne ki zaroorat kam ho jaati hai |
-| **`@nestjs/typeorm`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | TypeORM ko NestJS ke DI system ke saath integrate karne wala official wrapper package |
-| **`TypeOrmModule.forRoot()`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Poori application ke liye ek baar database connection configure/establish karta hai (root module me use hota hai) |
-| **`type` (DB driver)** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Kaunsa database engine use ho raha hai batata hai (`sqlite`, `postgres`, `mysql`, etc.) — TypeORM isi ke basis pe sahi driver load karta hai |
-| **`database`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | SQLite jaise file-based DB ke liye us file ka naam/path jaha actual data store hota hai |
-| **`entities`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Un saari classes ki list jo DB tables represent karti hain — TypeORM inhi se schema samajhta hai |
-| **`synchronize: true`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | TypeORM ko entities dekh kar DB schema (tables/columns) automatically create/update karne deta hai — dev me fast iteration ke liye achha, production me **kabhi use nahi karna** (accidental data loss ho sakta hai) |
-| **Dependency Version Mismatch** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Jab `package.json` me kisi library ka version doosri dependency (e.g. `@nestjs/typeorm`) ki required range se match nahi karta, aur usse type errors ya runtime errors aate hain — fix hamesha sahi version install karna hota hai, code nahi |
-| **`@Entity()`** | [Step 4](#step-4-user-entity-banaya) | Class ko ek DB table ke roop me register karta hai — TypeORM isi class se schema samajhta hai |
-| **`@PrimaryGeneratedColumn()`** | [Step 4](#step-4-user-entity-banaya) | Table ka primary key column banata hai, jiski value TypeORM khud auto-increment karke generate karta hai |
-| **`@Column()`** | [Step 4](#step-4-user-entity-banaya) | Class property ko ek normal DB column banata hai |
-| **Definite Assignment Assertion (`!`)** | [Step 4](#step-4-user-entity-banaya) | Property naam ke aage laga `!`, TypeScript ko batata hai ki value humne khud set nahi ki (yahan TypeORM runtime pe karega), isliye "not initialized" compile error na de |
-| **`TypeOrmModule.forRoot()` vs `forFeature()`** | [Step 4](#step-4-user-entity-banaya) | `forRoot()` poori app ke liye DB connection + global entity list define karta hai; `forFeature([Entity])` sirf us module ko us entity ka repository (DB query karne wala object) inject karne layak banata hai |
-| **DTO (`CreateUserDto`)** | [Step 6](#step-6-signup-endpoint--validation-setup) | Ek plain class jo request body ka expected shape define karti hai, aur `class-validator` decorators ke through validation rules bhi carry karti hai |
-| **`class-validator` decorators (`@IsEmail`, `@IsString`)** | [Step 6](#step-6-signup-endpoint--validation-setup) | DTO ki har property pe lagte hain, aur batate hain ki us field ki value kis format/type me honi chahiye |
-| **`ValidationPipe`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Incoming request body ko DTO ke validation rules ke against automatically check karta hai — fail hone par controller tak pahunche bina hi `400` return kar deta hai |
-| **`useGlobalPipes()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Ek pipe ko poori application ke har route pe apply karta hai, har controller me alag se lagane ki zaroorat nahi rehti |
-| **`whitelist: true`** | [Step 6](#step-6-signup-endpoint--validation-setup) | DTO me define na kiye gaye extra request body fields ko silently strip/remove kar deta hai |
-| **`@InjectRepository(Entity)`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Constructor parameter pe lagta hai, Nest ko batata hai ki us entity ka `Repository` yaha inject karo (`forFeature()` se available hua provider) |
-| **`repo.create()` vs `repo.save()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | `create()` sirf ek in-memory entity instance banata hai (DB me kuch nahi hota); `save()` asal me DB me insert/update query chalata hai aur Promise return karta hai |
-| **Floating Promise** | [Step 6](#step-6-signup-endpoint--validation-setup) | Jab ek async function ka returned Promise na `await` kiya jaye, na `return` kiya jaye, na `.catch()` laga ho — ESLint isse warning deta hai kyunki reject hone par error silently gum ho sakta hai; fix `return`, `await`, ya jaan-bujh kar `void` operator lagana hai |
-| **JSON.parse strictness** | [Step 6](#step-6-signup-endpoint--validation-setup) | Raw HTTP body ko JSON banane ke liye keys **double-quotes** me hona zaroori hai (JS object literal syntax jaise unquoted keys yaha invalid hain) — warna `ValidationPipe` tak pahunchne se pehle hi body-parser 400 de deta hai |
-| **`findOneBy()`/`findOne` vs `find()`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `findOneBy`/`findOne` ek single record (ya `null`) return karta hai; `find` hamesha ek **array** return karta hai, chahe 0, 1, ya multiple matches mile |
-| **`Partial<Entity>` (TS utility type)** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | Kisi bhi type ke saare properties ko **optional** bana deta hai — `update()` jaise methods me use hota hai jaha caller sirf wahi fields de jo change karni hain |
-| **`Object.assign(target, source)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `source` object ki properties `target` object pe copy/overwrite kar deta hai (aur `target` ko hi return karta hai) — partial updates apply karne ka common JS pattern |
-| **`repo.remove(entity)` vs `repo.delete(criteria)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `remove()` ko poora loaded entity chahiye, lifecycle hooks trigger karta hai, 2 DB calls lagte hain (SELECT + DELETE); `delete()` sirf id/criteria se seedha DELETE chalata hai (1 DB call), hooks trigger nahi karta, `DeleteResult` return karta hai entity ke bajaye |
-| **Entity Lifecycle Hooks (`@AfterInsert`, `@AfterUpdate`, `@AfterRemove`)** | [Step 8](#step-8-entity-lifecycle-hooks-add-kiye) | TypeORM khud call karta hai jab respective DB operation entity instance ke through complete ho — `save()`/`remove()` inhe trigger karte hain, `delete()`/`update(id, ...)` jaisi query-level shortcuts nahi karti |
-| **`@Param('name')`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | URL path ke dynamic segment (e.g. `/auth/:id`) ki value extract karta hai — value hamesha **string** hoti hai, number chahiye ho to manually convert karna padta hai |
-| **`@Query('name')`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | URL ke query string se value nikalta hai (e.g. `?email=x` se `x`) |
-| **`PUT` vs `PATCH`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | REST convention: `PUT` poora resource replace karta hai (saare fields expected), `PATCH` sirf diye gaye fields partially update karta hai |
-| **`NotFoundException`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | Nest ka built-in exception class jo throw hote hi automatically `404` status code ke saath structured error response bhej deta hai — plain `Error` throw karne se Nest default `500` bhej deta, jo galat status hota |
-| **`Like()` (TypeORM find operator)** | [Step 10](#step-10-email-contains-search-like) | `where` clause ki condition ko equality ke bajaye SQL `LIKE` pattern me convert karta hai — `%value%` se substring/"contains" search milta hai |
-| **Interceptor** | [Step 11](#step-11-response-serialization-with-interceptor) | Controller handler ke pehle/baad chalne wali class jo request/response ko modify kar sakti hai — request lifecycle: Middleware → Guard → Interceptor(pre) → Pipe → Handler → Interceptor(post) → Exception Filter |
-| **`@UseInterceptors()`** | [Step 11](#step-11-response-serialization-with-interceptor) | Ek interceptor ko method-level (ek route), class-level (poora controller), ya globally (`app.useGlobalInterceptors()`) attach karta hai |
-| **`class-transformer` (`@Expose()`, `plainToClass()`)** | [Step 11](#step-11-response-serialization-with-interceptor) | `@Expose()` ek field ko "whitelist" karta hai; `plainToClass(Dto, obj, { excludeExtraneousValues: true })` sirf `@Expose()` wale fields rakh kar plain object ko us DTO shape me convert kar deta hai — response serialization/sensitive-field-hiding ke liye use hota hai |
-| **Decorator Factory** | [Step 12](#step-12-reusable-serialize-decorator-banaya) | Ek function jo khud ek decorator return karta hai (e.g. `Serialize(dto)` → `UseInterceptors(new SerializeInterceptor(dto))`) — isse decorator ko parameter (config) diya ja sakta hai, `@Column()`/`@IsEmail()` jaise built-in decorators bhi isi pattern se bane hote hain |
-| **Constructor Property Shorthand (`private dto: any`)** | [Step 12](#step-12-reusable-serialize-decorator-banaya) | Constructor parameter pe `private`/`public`/`readonly` laga dene se TypeScript automatically ek class property bhi bana deta hai aur assign kar deta hai — `this.dto = dto;` alag se likhne ki zaroorat nahi padti |
+| Concept | Kahan use hua | Iska matlab | Commit |
+| --- | --- | --- | --- |
+| **Nest CLI** (`nest new`) | [Step 1](#step-1-project-generate-kiya) | Boilerplate project scaffold karne ka tool — module/controller/service ka default setup auto-generate karta hai | [`55145c9`](https://github.com/therishabh/nestjs-notes/commit/55145c9) |
+| **Nest CLI Schematics** (`nest g module/controller/service`) | [Step 2](#step-2-users-aur-reports-modules-banaye) | Ek command se ek feature ke liye module + controller + service teeno files aur unka boilerplate wiring auto-generate karta hai | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **Feature Module** | [Step 2](#step-2-users-aur-reports-modules-banaye) | Ek specific domain/feature (yahan `users`, `reports`) ke controllers aur providers ko apne andar group karne wala module | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`@Controller('prefix')`** | [Step 2](#step-2-users-aur-reports-modules-banaye) | Class ko HTTP routes handle karne wala controller banata hai, aur uske saare routes ke aage `prefix` add karta hai (e.g. `/users`) | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **TypeORM** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Node.js/TypeScript ka ORM (Object-Relational Mapper) — DB tables ko JS/TS classes (entities) ke through manage karne deta hai, raw SQL likhne ki zaroorat kam ho jaati hai | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`@nestjs/typeorm`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | TypeORM ko NestJS ke DI system ke saath integrate karne wala official wrapper package | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`TypeOrmModule.forRoot()`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Poori application ke liye ek baar database connection configure/establish karta hai (root module me use hota hai) | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`type` (DB driver)** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Kaunsa database engine use ho raha hai batata hai (`sqlite`, `postgres`, `mysql`, etc.) — TypeORM isi ke basis pe sahi driver load karta hai | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`database`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | SQLite jaise file-based DB ke liye us file ka naam/path jaha actual data store hota hai | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`entities`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Un saari classes ki list jo DB tables represent karti hain — TypeORM inhi se schema samajhta hai | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`synchronize: true`** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | TypeORM ko entities dekh kar DB schema (tables/columns) automatically create/update karne deta hai — dev me fast iteration ke liye achha, production me **kabhi use nahi karna** (accidental data loss ho sakta hai) | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **Dependency Version Mismatch** | [Step 3](#step-3-typeorm--sqlite-setup-kiya) | Jab `package.json` me kisi library ka version doosri dependency (e.g. `@nestjs/typeorm`) ki required range se match nahi karta, aur usse type errors ya runtime errors aate hain — fix hamesha sahi version install karna hota hai, code nahi | [`7dff8a5`](https://github.com/therishabh/nestjs-notes/commit/7dff8a5) |
+| **`@Entity()`** | [Step 4](#step-4-user-entity-banaya) | Class ko ek DB table ke roop me register karta hai — TypeORM isi class se schema samajhta hai | [`2f75e65`](https://github.com/therishabh/nestjs-notes/commit/2f75e65) |
+| **`@PrimaryGeneratedColumn()`** | [Step 4](#step-4-user-entity-banaya) | Table ka primary key column banata hai, jiski value TypeORM khud auto-increment karke generate karta hai | [`2f75e65`](https://github.com/therishabh/nestjs-notes/commit/2f75e65) |
+| **`@Column()`** | [Step 4](#step-4-user-entity-banaya) | Class property ko ek normal DB column banata hai | [`2f75e65`](https://github.com/therishabh/nestjs-notes/commit/2f75e65) |
+| **Definite Assignment Assertion (`!`)** | [Step 4](#step-4-user-entity-banaya) | Property naam ke aage laga `!`, TypeScript ko batata hai ki value humne khud set nahi ki (yahan TypeORM runtime pe karega), isliye "not initialized" compile error na de | [`2f75e65`](https://github.com/therishabh/nestjs-notes/commit/2f75e65) |
+| **`TypeOrmModule.forRoot()` vs `forFeature()`** | [Step 4](#step-4-user-entity-banaya) | `forRoot()` poori app ke liye DB connection + global entity list define karta hai; `forFeature([Entity])` sirf us module ko us entity ka repository (DB query karne wala object) inject karne layak banata hai | [`2f75e65`](https://github.com/therishabh/nestjs-notes/commit/2f75e65) |
+| **DTO (`CreateUserDto`)** | [Step 6](#step-6-signup-endpoint--validation-setup) | Ek plain class jo request body ka expected shape define karti hai, aur `class-validator` decorators ke through validation rules bhi carry karti hai | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **`class-validator` decorators (`@IsEmail`, `@IsString`)** | [Step 6](#step-6-signup-endpoint--validation-setup) | DTO ki har property pe lagte hain, aur batate hain ki us field ki value kis format/type me honi chahiye | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **`ValidationPipe`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Incoming request body ko DTO ke validation rules ke against automatically check karta hai — fail hone par controller tak pahunche bina hi `400` return kar deta hai | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **`useGlobalPipes()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Ek pipe ko poori application ke har route pe apply karta hai, har controller me alag se lagane ki zaroorat nahi rehti | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **`whitelist: true`** | [Step 6](#step-6-signup-endpoint--validation-setup) | DTO me define na kiye gaye extra request body fields ko silently strip/remove kar deta hai | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **`@InjectRepository(Entity)`** | [Step 6](#step-6-signup-endpoint--validation-setup) | Constructor parameter pe lagta hai, Nest ko batata hai ki us entity ka `Repository` yaha inject karo (`forFeature()` se available hua provider) | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **`repo.create()` vs `repo.save()`** | [Step 6](#step-6-signup-endpoint--validation-setup) | `create()` sirf ek in-memory entity instance banata hai (DB me kuch nahi hota); `save()` asal me DB me insert/update query chalata hai aur Promise return karta hai | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **Floating Promise** | [Step 6](#step-6-signup-endpoint--validation-setup) | Jab ek async function ka returned Promise na `await` kiya jaye, na `return` kiya jaye, na `.catch()` laga ho — ESLint isse warning deta hai kyunki reject hone par error silently gum ho sakta hai; fix `return`, `await`, ya jaan-bujh kar `void` operator lagana hai | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **JSON.parse strictness** | [Step 6](#step-6-signup-endpoint--validation-setup) | Raw HTTP body ko JSON banane ke liye keys **double-quotes** me hona zaroori hai (JS object literal syntax jaise unquoted keys yaha invalid hain) — warna `ValidationPipe` tak pahunchne se pehle hi body-parser 400 de deta hai | [`f506f59`](https://github.com/therishabh/nestjs-notes/commit/f506f59) |
+| **`findOneBy()`/`findOne` vs `find()`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `findOneBy`/`findOne` ek single record (ya `null`) return karta hai; `find` hamesha ek **array** return karta hai, chahe 0, 1, ya multiple matches mile | [`90fa166`](https://github.com/therishabh/nestjs-notes/commit/90fa166) |
+| **`Partial<Entity>` (TS utility type)** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | Kisi bhi type ke saare properties ko **optional** bana deta hai — `update()` jaise methods me use hota hai jaha caller sirf wahi fields de jo change karni hain | [`90fa166`](https://github.com/therishabh/nestjs-notes/commit/90fa166) |
+| **`Object.assign(target, source)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `source` object ki properties `target` object pe copy/overwrite kar deta hai (aur `target` ko hi return karta hai) — partial updates apply karne ka common JS pattern | [`90fa166`](https://github.com/therishabh/nestjs-notes/commit/90fa166) |
+| **`repo.remove(entity)` vs `repo.delete(criteria)`** | [Step 7](#step-7-find-update-remove-methods-add-kiye) | `remove()` ko poora loaded entity chahiye, lifecycle hooks trigger karta hai, 2 DB calls lagte hain (SELECT + DELETE); `delete()` sirf id/criteria se seedha DELETE chalata hai (1 DB call), hooks trigger nahi karta, `DeleteResult` return karta hai entity ke bajaye | [`90fa166`](https://github.com/therishabh/nestjs-notes/commit/90fa166) |
+| **Entity Lifecycle Hooks (`@AfterInsert`, `@AfterUpdate`, `@AfterRemove`)** | [Step 8](#step-8-entity-lifecycle-hooks-add-kiye) | TypeORM khud call karta hai jab respective DB operation entity instance ke through complete ho — `save()`/`remove()` inhe trigger karte hain, `delete()`/`update(id, ...)` jaisi query-level shortcuts nahi karti | [`90fa166`](https://github.com/therishabh/nestjs-notes/commit/90fa166) |
+| **`@Param('name')`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | URL path ke dynamic segment (e.g. `/auth/:id`) ki value extract karta hai — value hamesha **string** hoti hai, number chahiye ho to manually convert karna padta hai | [`09a8d88`](https://github.com/therishabh/nestjs-notes/commit/09a8d88) |
+| **`@Query('name')`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | URL ke query string se value nikalta hai (e.g. `?email=x` se `x`) | [`09a8d88`](https://github.com/therishabh/nestjs-notes/commit/09a8d88) |
+| **`PUT` vs `PATCH`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | REST convention: `PUT` poora resource replace karta hai (saare fields expected), `PATCH` sirf diye gaye fields partially update karta hai | [`09a8d88`](https://github.com/therishabh/nestjs-notes/commit/09a8d88) |
+| **`NotFoundException`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | Nest ka built-in exception class jo throw hote hi automatically `404` status code ke saath structured error response bhej deta hai — plain `Error` throw karne se Nest default `500` bhej deta, jo galat status hota | [`09a8d88`](https://github.com/therishabh/nestjs-notes/commit/09a8d88) |
+| **`Like()` (TypeORM find operator)** | [Step 10](#step-10-email-contains-search-like) | `where` clause ki condition ko equality ke bajaye SQL `LIKE` pattern me convert karta hai — `%value%` se substring/"contains" search milta hai | [`09a8d88`](https://github.com/therishabh/nestjs-notes/commit/09a8d88) |
+| **Interceptor** | [Step 11](#step-11-response-serialization-with-interceptor) | Controller handler ke pehle/baad chalne wali class jo request/response ko modify kar sakti hai — request lifecycle: Middleware → Guard → Interceptor(pre) → Pipe → Handler → Interceptor(post) → Exception Filter | [`e07edb1`](https://github.com/therishabh/nestjs-notes/commit/e07edb1) |
+| **`@UseInterceptors()`** | [Step 11](#step-11-response-serialization-with-interceptor) | Ek interceptor ko method-level (ek route), class-level (poora controller), ya globally (`app.useGlobalInterceptors()`) attach karta hai | [`e07edb1`](https://github.com/therishabh/nestjs-notes/commit/e07edb1) |
+| **`class-transformer` (`@Expose()`, `plainToClass()`)** | [Step 11](#step-11-response-serialization-with-interceptor) | `@Expose()` ek field ko "whitelist" karta hai; `plainToClass(Dto, obj, { excludeExtraneousValues: true })` sirf `@Expose()` wale fields rakh kar plain object ko us DTO shape me convert kar deta hai — response serialization/sensitive-field-hiding ke liye use hota hai | [`e07edb1`](https://github.com/therishabh/nestjs-notes/commit/e07edb1) |
+| **Decorator Factory** | [Step 12](#step-12-reusable-serialize-decorator-banaya) | Ek function jo khud ek decorator return karta hai (e.g. `Serialize(dto)` → `UseInterceptors(new SerializeInterceptor(dto))`) — isse decorator ko parameter (config) diya ja sakta hai, `@Column()`/`@IsEmail()` jaise built-in decorators bhi isi pattern se bane hote hain | [`c6812c9`](https://github.com/therishabh/nestjs-notes/commit/c6812c9) |
+| **Constructor Property Shorthand (`private dto: any`)** | [Step 12](#step-12-reusable-serialize-decorator-banaya) | Constructor parameter pe `private`/`public`/`readonly` laga dene se TypeScript automatically ek class property bhi bana deta hai aur assign kar deta hai — `this.dto = dto;` alag se likhne ki zaroorat nahi padti | [`c6812c9`](https://github.com/therishabh/nestjs-notes/commit/c6812c9) |
+| **`AuthService` (separate service for signup workflow)** | [Step 13](#step-13-authservice--password-hashing) | Business workflow (duplicate-check + hashing) ko `UsersService` (plain DB CRUD) se alag rakha — Single Responsibility Principle | {{STEP13_COMMIT}} |
+| **`promisify()`** | [Step 13](#step-13-authservice--password-hashing) | Node ke `util` module ka function jo ek callback-style function ko Promise-returning function me convert kar deta hai | {{STEP13_COMMIT}} |
+| **Salt (password hashing)** | [Step 13](#step-13-authservice--password-hashing) | Har user ke liye generate hone wala ek random unique string, jo hash se pehle password ke saath mix hota hai — same password wale users ka bhi final hash alag banata hai, rainbow-table attacks se bachata hai | {{STEP13_COMMIT}} |
+| **`scrypt` (key derivation function)** | [Step 13](#step-13-authservice--password-hashing) | Jaan-bujh kar slow/memory-intensive banaya gaya hashing algorithm (bcrypt/argon2 jaisa) — brute-force attacks ko expensive banata hai; fast hash functions (MD5/SHA-256) password hashing ke liye unsafe hote hain | {{STEP13_COMMIT}} |
+| **`BadRequestException`** | [Step 13](#step-13-authservice--password-hashing) | Nest ka built-in exception jo `400` status ke saath structured error deta hai — client-side galti (yaha: duplicate email) ke liye use hota hai | {{STEP13_COMMIT}} |
 
 ---
 
@@ -703,6 +754,17 @@ Agar us Promise ke andar error/rejection aaya (jaise DB insert fail hua), to wo 
 
 **Q: Definite assignment assertion (`!`) TypeScript me kya karta hai, aur `?` se kaise alag hai?**
 `!` (e.g. `id!: number`) compiler ko bolta hai "ye property zaroor assign hogi (runtime pe), compile-time check mat karo" — property ka type non-nullable rehta hai. `?` (e.g. `id?: number`) property ko **optional** banata hai — uska type automatically `number | undefined` ho jaata hai, aur usse access karne se pehle check karna padta hai. TypeORM entities me `!` isliye use hota hai kyunki ORM khud (constructor ke bahar) properties populate karta hai.
+
+### Authentication & Security
+
+**Q: Password ko hash kyun karte hain, sirf encrypt kyun nahi?**
+Encryption **reversible** hota hai (sahi key se decrypt karke original wapas mil jaata hai) — agar attacker key bhi chura le to sab passwords wapas mil jaate. Hashing **one-way** hai (practically irreversible) — hash se original password wapas nikalna infeasible hota hai. Login ke time password verify karne ke liye original chahiye hi nahi hota — bas naya input hash karke stored hash se compare kar lete hain.
+
+**Q: Salt kya hota hai, aur iske bina hashing kyun risky hai?**
+Salt ek random, per-user unique string hai jo hash banane se pehle password ke saath mix ki jaati hai. Agar salt na ho, to do users jinka password same hai (e.g. "123456"), unka stored hash bhi same hoga — attacker ek baar "123456" ka hash pre-compute kar ke (**rainbow table**) usse match karne wale saare users ka password ek saath crack kar sakta hai. Salt se har user ka final hash unique ban jaata hai, chahe unka plain password same ho.
+
+**Q: `scrypt`/`bcrypt` jaise algorithms MD5/SHA-256 se password hashing ke liye better kyun hain?**
+MD5/SHA-256 **fast** hone ke liye design kiye gaye hain (checksums/integrity ke liye) — yehi cheez password hashing ke liye **bura** hai, kyunki attacker bhi utni hi fast speed se brute-force try kar sakta hai (modern GPU se billions/second). `scrypt`/`bcrypt`/`argon2` jaan-bujh kar **slow aur memory-intensive** design kiye gaye hain, taaki ek single guess try karna bhi expensive ho — isse brute-force attack practically infeasible ho jaata hai.
 
 ### Dependency Management
 
