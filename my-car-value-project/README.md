@@ -18,6 +18,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 8: Entity Lifecycle Hooks Add Kiye](#step-8-entity-lifecycle-hooks-add-kiye)
   - [Step 9: Full CRUD REST Endpoints Banaye](#step-9-full-crud-rest-endpoints-banaye)
   - [Step 10: Email Contains Search (`Like()`)](#step-10-email-contains-search-like)
+  - [Step 11: Response Serialization with Interceptor](#step-11-response-serialization-with-interceptor)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -40,11 +41,13 @@ my-car-value-project/
     ├── app.module.ts                    # Root module — TypeOrmModule.forRoot() se DB connect karta hai, UsersModule aur ReportsModule import karta hai
     ├── app.controller.ts                # Default scaffold controller (GET /)
     ├── app.service.ts                   # Default scaffold service
+    ├── interceptors/
+    │   └── serialize.interceptor.ts     # `SerializeInterceptor` — response ko UserDto shape me convert karta hai (password chhupane ke liye)
     ├── users/
     │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup, get by id, list/search, update, delete
     │   ├── users.service.ts             # Users se related business logic — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
-    │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (saare fields optional) — request body shapes + class-validator rules
+    │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (partial update) + `UserDto` (safe response shape, password exclude) — sab request/response shapes
     │   ├── request.http                 # Manual testing ke liye sample requests (VS Code REST Client extension se run hote hain)
     │   └── users.module.ts              # UsersController + UsersService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
@@ -446,6 +449,57 @@ find(email: string) {
 - **Case-sensitivity DB-dependent hai** — SQLite me `LIKE` by default ASCII case-insensitive hota hai, Postgres/MySQL me case-sensitive ho sakta hai (waha case-insensitive ke liye `ILIKE` ya `LOWER()` chahiye hota).
 - Agar `email` query param bilkul diya hi na ho (`undefined`/empty), to `Like('%%')` jaisi cheez banane ke bajaye seedha `this.repo.find()` (bina filter) call kiya — ye edge-case handling hai taaki `GET /auth` bina query ke saare users list kar sake.
 
+### Step 11: Response Serialization with Interceptor
+
+Ek security gap fix kiya: ab tak koi bhi route jo `User` return karta tha (jaise `GET /auth/:id`), poora entity object bhej raha tha — jisme **`password` bhi shamil hota tha** (chahe plain text ho ya hashed, dono hi client ko expose nahi karne chahiye). Fix karne ke liye ek **response DTO** aur ek **custom Interceptor** banaya.
+
+**`user.dto.ts`** — naya `UserDto` add kiya, jo sirf safe/public fields declare karta hai:
+
+```ts
+// users/user.dto.ts
+export class UserDto {
+  @Expose()
+  id!: number;
+
+  @Expose()
+  email!: string;
+}
+```
+
+`@Expose()` (`class-transformer` se) us field ko "whitelist" karta hai — jab bhi is class me `excludeExtraneousValues: true` ke saath conversion ho, sirf `@Expose()` wale fields hi result me aayenge. `password` field yaha hai hi nahi, isliye wo kabhi bhi is DTO ke through expose nahi ho sakta.
+
+**`interceptors/serialize.interceptor.ts`** — ek custom Interceptor jo response ko is DTO shape me convert karta hai:
+
+```ts
+// interceptors/serialize.interceptor.ts
+export class SerializeInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler<any>) {
+    return next.handle().pipe(
+      map((data: any) => {
+        return plainToClass(UserDto, data, {
+          excludeExtraneousValues: true,
+        });
+      }),
+    );
+  }
+}
+```
+
+- **Interceptor** NestJS ke request lifecycle ka hissa hai — Controller Handler chalne ke **pehle aur/ya baad**, dono me kaam kar sakta hai. Yaha `next.handle()` (jo controller ka actual response ek RxJS `Observable` ke roop me deta hai) pe `.pipe(map(...))` laga kar response ko **modify** kiya ja raha hai, controller chalne ke **baad**.
+- **`plainToClass(UserDto, data, { excludeExtraneousValues: true })`** — controller se aaya plain `User` object (jisme `password` bhi hai) leke, sirf `UserDto` me `@Expose()` wale fields (`id`, `email`) rakh kar baaki sab (`password` included) **drop** kar deta hai.
+
+**`users.controller.ts`** — interceptor ko route pe attach kiya:
+
+```ts
+@UseInterceptors(SerializeInterceptor)
+@Get('/:id')
+async findUser(@Param('id') id: string) {
+  ...
+}
+```
+
+**Known limitation**: `@UseInterceptors()` yaha **method-level** (sirf `findUser` route pe) lagaya gaya hai — controller ke baaki routes (`create`, `findAllUsers`, `update`, `remove`) ka response abhi bhi raw entity hi hai (`password` sahit). Isse fix karne ke do tareeke: (1) `@UseInterceptors()` ko **class-level** (poore `@Controller()` pe) laga do, ya (2) Nest ke **global interceptor** (`app.useGlobalInterceptors()`, jaisa `main.ts` me `ValidationPipe` global lagaya tha) ke through poori app me apply karo. Ek aur limitation — `SerializeInterceptor` abhi hardcoded `UserDto` pe based hai, isliye kisi doosri entity (jaise `Report`) ke liye reuse nahi ho sakta; reusable banane ke liye DTO class ko constructor-parameter banana padega.
+
 ---
 
 ## Concepts Glossary
@@ -490,6 +544,9 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`PUT` vs `PATCH`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | REST convention: `PUT` poora resource replace karta hai (saare fields expected), `PATCH` sirf diye gaye fields partially update karta hai |
 | **`NotFoundException`** | [Step 9](#step-9-full-crud-rest-endpoints-banaye) | Nest ka built-in exception class jo throw hote hi automatically `404` status code ke saath structured error response bhej deta hai — plain `Error` throw karne se Nest default `500` bhej deta, jo galat status hota |
 | **`Like()` (TypeORM find operator)** | [Step 10](#step-10-email-contains-search-like) | `where` clause ki condition ko equality ke bajaye SQL `LIKE` pattern me convert karta hai — `%value%` se substring/"contains" search milta hai |
+| **Interceptor** | [Step 11](#step-11-response-serialization-with-interceptor) | Controller handler ke pehle/baad chalne wali class jo request/response ko modify kar sakti hai — request lifecycle: Middleware → Guard → Interceptor(pre) → Pipe → Handler → Interceptor(post) → Exception Filter |
+| **`@UseInterceptors()`** | [Step 11](#step-11-response-serialization-with-interceptor) | Ek interceptor ko method-level (ek route), class-level (poora controller), ya globally (`app.useGlobalInterceptors()`) attach karta hai |
+| **`class-transformer` (`@Expose()`, `plainToClass()`)** | [Step 11](#step-11-response-serialization-with-interceptor) | `@Expose()` ek field ko "whitelist" karta hai; `plainToClass(Dto, obj, { excludeExtraneousValues: true })` sirf `@Expose()` wale fields rakh kar plain object ko us DTO shape me convert kar deta hai — response serialization/sensitive-field-hiding ke liye use hota hai |
 
 ---
 
@@ -565,6 +622,21 @@ DTO ek plain class hai jo define karti hai ki ek request/response me data ka **s
 **Q: Pipe kya hota hai NestJS me?**
 Pipe ek class hai jo request handler (controller method) chalne se **pehle** input data ko transform ya validate karti hai. `ValidationPipe` inbuilt example hai — Nest ke request lifecycle me ye order hota hai: **Middleware → Guard → Interceptor (pre) → Pipe → Controller Handler → Interceptor (post) → Exception Filter (agar error aaya)**.
 
+### Interceptors & Serialization
+
+**Q: Interceptor kya hota hai, aur Pipe se kaise alag hai?**
+Pipe sirf **request ke aane pe, handler chalne se pehle** kaam karta hai (transform/validate input). Interceptor iske ulat/extra hai — ye **response ke jaane se pehle** (aur chahe to handler chalne se pehle bhi) kaam kar sakta hai, kyunki isse `next.handle()` ka poora control milta hai — controller ka return value ek `Observable` ke roop me milta hai jise `.pipe(map(...))` se modify kiya ja sakta hai.
+
+**Q: Password jaisi sensitive field ko API response se kaise hide karoge?**
+Sabse common tareeka: ek **response DTO** banao jisme sirf safe fields ho (`@Expose()` decorator ke saath), aur ek **Interceptor** lagao jo controller ke return value ko `class-transformer` ke `plainToClass(Dto, data, { excludeExtraneousValues: true })` se us DTO shape me convert kar de — koi bhi field jo DTO me `@Expose()` nahi hai (jaise `password`), automatically drop ho jaati hai. (Alternative approach: entity column pe `@Column({ select: false })` lagana, jisse wo column query se hi nahi aata — lekin fir explicitly login jaisi jagah usse `.addSelect()` karna padta.)
+
+**Q: `@UseInterceptors()` method-level, class-level, aur global — inme farak kya hai?**
+- **Method-level** (`@UseInterceptors()` ek specific route handler pe) — sirf us ek route ka response affect hota hai.
+- **Class-level** (`@UseInterceptors()` poore `@Controller()` class pe) — us controller ke saare routes affect hote hain.
+- **Global** (`app.useGlobalInterceptors()` `main.ts` me, jaise `ValidationPipe` global lagaya tha) — poori application ke saare routes affect hote hain.
+
+Is project me abhi **method-level** use kiya hai (sirf `GET /auth/:id` pe) — ye ek known gap hai, kyunki baaki routes (`create`, `findAllUsers`, etc.) ka response abhi bhi raw entity hai jisme `password` included hai.
+
 ### JavaScript / TypeScript Fundamentals
 
 **Q: Promise ke bina `await`/`return`/`.catch()` ke chhod dena kyun bura hai ("floating promise")?**
@@ -583,7 +655,6 @@ Agar us Promise ke andar error/rejection aaya (jaise DB insert fail hua), to wo 
 Interview me aksar in per bhi pucha jaata hai — abhi is project me implement nahi kiye, lekin concept jaanna zaroori hai:
 
 - **Guards** — route access control (e.g. `AuthGuard` — logged-in user hi access kar sake).
-- **Interceptors** — response transform karna, logging, caching (request ke pehle aur baad dono me chal sakte hain).
 - **Exception Filters** — errors ko custom format me catch/handle karna (`@Catch()`).
 - **Middleware** — Express-level, route handler se bhi pehle chalta hai (e.g. logging, cookie parsing).
 - **Custom Decorators** (`@CurrentUser()` jaisa) — repetitive logic ko ek decorator me wrap karna.

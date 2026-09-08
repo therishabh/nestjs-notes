@@ -7,11 +7,12 @@ import {
   Post,
   Query,
   Put,
-  Patch,
   NotFoundException,
+  UseInterceptors,
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
+import { SerializeInterceptor } from 'src/interceptors/serialize.interceptor';
 
 // @Controller('auth') is class ke saare routes ke aage `/auth` prefix laga deta hai
 // (isliye neeche wala route asal me `/auth/signup` pe hit hota hai)
@@ -34,6 +35,11 @@ export class UsersController {
     return this.usersService.create(bodyData.email, bodyData.password);
   }
 
+  // @UseInterceptors() is single route pe SerializeInterceptor attach karta hai —
+  // (method-level use kiya hai, isliye sirf `findUser` ka response filter hoga, baaki
+  // routes ka response abhi bhi raw `User` entity hi rahega, jisme `password` bhi included hai —
+  // production-grade app me ye poore controller ya globally lagana chahiye)
+  @UseInterceptors(SerializeInterceptor)
   @Get('/:id')
   async findUser(@Param('id') id: string) {
     const user = await this.usersService.findOne(parseInt(id));

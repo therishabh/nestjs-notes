@@ -10,20 +10,12 @@ Content-Type: application/json
 
 
 ### Find a particular user with ID
-GET http://localhost:3030/auth/1
+GET http://localhost:3030/auth/3
 
 
 ### Find all users with query params
 GET http://localhost:3030/auth
 
-
-### Update user info
-PATCH http://localhost:3030/auth/2
-Content-Type: application/json
-
-{
-    "email": "madhavi@gmail.com"
-}
 
 
 ### Update user info
@@ -37,4 +29,4 @@ Content-Type: application/json
 
 
 ### Delete a particular user with ID
-DELETE http://localhost:3030/auth/1
+DELETE http://localhost:3030/auth/2
