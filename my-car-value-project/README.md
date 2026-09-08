@@ -373,6 +373,26 @@ Ye TypeORM ko entities dekh kar khud DB schema (tables/columns) create/alter/dro
 **Q: ORM (jaise TypeORM) use karne ka fayda/nuksaan kya hai?**
 Fayda: raw SQL likhne ki zaroorat kam ho jaati hai, type-safety milti hai (TS classes = tables), database switch karna aasan hota hai (SQLite se Postgres). Nuksaan: complex/optimized queries ke liye ORM ka generated SQL kabhi inefficient ho sakta hai, aur ORM ka apna learning curve/abstraction overhead hota hai.
 
+**Q: `@InjectRepository(Entity)` aur `@InjectDataSource()` me kya farak hai — kab kya use karoge?**
+Dono alag abstraction level pe hain:
+- **`@InjectRepository(Entity)`** ek **single entity ka Repository** deta hai (`Repository<User>`) jisme `find()`, `save()`, `create()`, `delete()` jaise high-level, entity-scoped methods hote hain. Isi project ka `UsersService` isse use karta hai kyunki sirf ek entity (`User`) pe simple CRUD ho raha hai.
+- **`@InjectDataSource()`** poora **`DataSource`** (connection-level) object deta hai — isse `dataSource.getRepository(Entity)` (kisi bhi entity ka repository on-the-fly), raw SQL (`dataSource.query(...)`), aur sabse important **transactions** (`dataSource.transaction(async (manager) => {...})`) chala sakte ho.
+
+**Rule of thumb**: `InjectRepository` = single-entity simple CRUD (jaise abhi `UsersService.create()`). `InjectDataSource` = jab **multiple entities ek saath, ek hi transaction me** update karni ho (e.g. signup pe `User` aur `Report` dono create ho, aur beech me error aaye to dono rollback ho jaayein), ya raw SQL/complex query chahiye ho — ek single Repository se cross-entity transaction possible nahi hai kyunki wo sirf ek entity tak limited hota hai.
+
+```ts
+// InjectDataSource se cross-entity transaction ka example
+constructor(@InjectDataSource() private dataSource: DataSource) {}
+
+async createUserWithReport(email: string, password: string) {
+  return this.dataSource.transaction(async (manager) => {
+    const user = await manager.save(User, { email, password });
+    await manager.save(Report, { price: 0, userId: user.id });
+    return user; // agar Report save fail ho, User save bhi automatically rollback ho jayega
+  });
+}
+```
+
 ### Validation & DTOs
 
 **Q: DTO (Data Transfer Object) kya hota hai aur kyun use karte hain?**
