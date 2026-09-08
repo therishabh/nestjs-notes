@@ -4,13 +4,13 @@ POST http://localhost:3030/auth/signup
 Content-Type: application/json
 
 {
-    "email": "madhav@gmail.com",
+    "email": "sonam@gmail.com",
     "password": "fgfgfg"
 }
 
 
 ### Find a particular user with ID
-GET http://localhost:3030/auth/3
+GET http://localhost:3030/auth/4
 
 
 ### Find all users with query params

@@ -19,6 +19,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 9: Full CRUD REST Endpoints Banaye](#step-9-full-crud-rest-endpoints-banaye)
   - [Step 10: Email Contains Search (`Like()`)](#step-10-email-contains-search-like)
   - [Step 11: Response Serialization with Interceptor](#step-11-response-serialization-with-interceptor)
+  - [Step 12: Reusable `Serialize()` Decorator Banaya](#step-12-reusable-serialize-decorator-banaya)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -42,7 +43,7 @@ my-car-value-project/
     ├── app.controller.ts                # Default scaffold controller (GET /)
     ├── app.service.ts                   # Default scaffold service
     ├── interceptors/
-    │   └── serialize.interceptor.ts     # `SerializeInterceptor` — response ko UserDto shape me convert karta hai (password chhupane ke liye)
+    │   └── serialize.interceptor.ts     # `SerializeInterceptor` (reusable, DTO constructor-param leta hai) + `Serialize()` decorator factory — response ko target DTO shape me convert karta hai (password chhupane ke liye)
     ├── users/
     │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup, get by id, list/search, update, delete
     │   ├── users.service.ts             # Users se related business logic — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
@@ -498,7 +499,57 @@ async findUser(@Param('id') id: string) {
 }
 ```
 
-**Known limitation**: `@UseInterceptors()` yaha **method-level** (sirf `findUser` route pe) lagaya gaya hai — controller ke baaki routes (`create`, `findAllUsers`, `update`, `remove`) ka response abhi bhi raw entity hi hai (`password` sahit). Isse fix karne ke do tareeke: (1) `@UseInterceptors()` ko **class-level** (poore `@Controller()` pe) laga do, ya (2) Nest ke **global interceptor** (`app.useGlobalInterceptors()`, jaisa `main.ts` me `ValidationPipe` global lagaya tha) ke through poori app me apply karo. Ek aur limitation — `SerializeInterceptor` abhi hardcoded `UserDto` pe based hai, isliye kisi doosri entity (jaise `Report`) ke liye reuse nahi ho sakta; reusable banane ke liye DTO class ko constructor-parameter banana padega.
+**Known limitation (Step 11 tak)**: `@UseInterceptors()` yaha **method-level** (sirf `findUser` route pe) lagaya gaya tha — controller ke baaki routes (`create`, `findAllUsers`, `update`, `remove`) ka response abhi bhi raw entity hi tha (`password` sahit). Aur `SerializeInterceptor` hardcoded `UserDto` pe based tha, isliye kisi doosri entity (jaise `Report`) ke liye reuse nahi ho sakta tha.
+
+### Step 12: Reusable `Serialize()` Decorator Banaya
+
+`SerializeInterceptor` ko **generic/reusable** banane ke liye do changes kiye:
+
+**1. Interceptor ka constructor ab target DTO class accept karta hai** (hardcoded `UserDto` ki jagah):
+
+```ts
+// interceptors/serialize.interceptor.ts
+export class SerializeInterceptor implements NestInterceptor {
+  constructor(private dto: any) {}
+
+  intercept(context: ExecutionContext, next: CallHandler<any>) {
+    return next.handle().pipe(
+      map((data: any) => {
+        return plainToClass(this.dto, data, {
+          excludeExtraneousValues: true,
+        });
+      }),
+    );
+  }
+}
+```
+
+`private dto: any` **constructor property shorthand** hai — `private` keyword laga kar TypeScript automatically ek `this.dto` class property bhi bana deta hai, alag se `this.dto = dto` likhna nahi padta. Ab `intercept()` me hardcoded `UserDto` ki jagah `this.dto` use hota hai, isliye jo bhi class constructor me pass ki jaaye wahi apply hogi.
+
+**2. Ek "decorator factory" (`Serialize()`) banaya jo isse use karne me aasaan banata hai:**
+
+```ts
+export function Serialize(dto: any) {
+  return UseInterceptors(new SerializeInterceptor(dto));
+}
+```
+
+`Serialize()` ek **function hai jo khud ek decorator return karta hai** (isiliye "decorator factory" kehte hain — jaise `@Column()`, `@IsEmail()` bhi actually factories hi hain). Isse controller me likhna hota hai `@Serialize(UserDto)`, jo internally `@UseInterceptors(new SerializeInterceptor(UserDto))` jaisa hi hai — bas chhota aur zyada readable syntax milta hai.
+
+```ts
+// users.controller.ts
+@Serialize(UserDto)
+@Get('/:id')
+async findUser(@Param('id') id: string) { ... }
+
+@Serialize(UserDto)
+@Get()
+findAllUsers(@Query('email') email: string) { ... }
+```
+
+**Ek bonus fact jo yaha discover hua**: `find()` route (`findAllUsers`) `User[]` (array) return karta hai, phir bhi `@Serialize(UserDto)` sahi se kaam karta hai — `plainToClass()` khud detect kar leta hai ki input array hai, aur **har element ko individually** target DTO me convert kar deta hai. Manually `.map()` likhne ki zaroorat nahi padi.
+
+**Baaki gaps abhi bhi hain** (jaan-bujh kar is project ka aage ka scope): `create`, `update`, `remove` routes pe abhi `@Serialize()` nahi lagaya, isliye unka response abhi bhi raw entity hi hai. Real app me poore controller pe class-level `@Serialize(UserDto)` laga dena zyada consistent hota.
 
 ---
 
@@ -547,6 +598,8 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **Interceptor** | [Step 11](#step-11-response-serialization-with-interceptor) | Controller handler ke pehle/baad chalne wali class jo request/response ko modify kar sakti hai — request lifecycle: Middleware → Guard → Interceptor(pre) → Pipe → Handler → Interceptor(post) → Exception Filter |
 | **`@UseInterceptors()`** | [Step 11](#step-11-response-serialization-with-interceptor) | Ek interceptor ko method-level (ek route), class-level (poora controller), ya globally (`app.useGlobalInterceptors()`) attach karta hai |
 | **`class-transformer` (`@Expose()`, `plainToClass()`)** | [Step 11](#step-11-response-serialization-with-interceptor) | `@Expose()` ek field ko "whitelist" karta hai; `plainToClass(Dto, obj, { excludeExtraneousValues: true })` sirf `@Expose()` wale fields rakh kar plain object ko us DTO shape me convert kar deta hai — response serialization/sensitive-field-hiding ke liye use hota hai |
+| **Decorator Factory** | [Step 12](#step-12-reusable-serialize-decorator-banaya) | Ek function jo khud ek decorator return karta hai (e.g. `Serialize(dto)` → `UseInterceptors(new SerializeInterceptor(dto))`) — isse decorator ko parameter (config) diya ja sakta hai, `@Column()`/`@IsEmail()` jaise built-in decorators bhi isi pattern se bane hote hain |
+| **Constructor Property Shorthand (`private dto: any`)** | [Step 12](#step-12-reusable-serialize-decorator-banaya) | Constructor parameter pe `private`/`public`/`readonly` laga dene se TypeScript automatically ek class property bhi bana deta hai aur assign kar deta hai — `this.dto = dto;` alag se likhne ki zaroorat nahi padti |
 
 ---
 
@@ -635,7 +688,13 @@ Sabse common tareeka: ek **response DTO** banao jisme sirf safe fields ho (`@Exp
 - **Class-level** (`@UseInterceptors()` poore `@Controller()` class pe) — us controller ke saare routes affect hote hain.
 - **Global** (`app.useGlobalInterceptors()` `main.ts` me, jaise `ValidationPipe` global lagaya tha) — poori application ke saare routes affect hote hain.
 
-Is project me abhi **method-level** use kiya hai (sirf `GET /auth/:id` pe) — ye ek known gap hai, kyunki baaki routes (`create`, `findAllUsers`, etc.) ka response abhi bhi raw entity hai jisme `password` included hai.
+Is project me `GET /auth/:id` aur `GET /auth` (list/search) pe **method-level** use kiya hai — `create`, `update`, `remove` abhi bhi raw entity return karte hain (jaan-bujh kar chhoda gaya gap, taaki class-level/global approach interview me discuss ho sake).
+
+**Q: Ek hardcoded interceptor (sirf ek fixed DTO ke liye) ko reusable kaise banaoge?**
+Do cheezein karni padti hain: (1) Interceptor ke **constructor me DTO class ko parameter banao** (`constructor(private dto: any) {}`), aur hardcoded class reference ki jagah `this.dto` use karo `plainToClass()` me. (2) Ek **decorator factory** function banao (e.g. `function Serialize(dto: any) { return UseInterceptors(new SerializeInterceptor(dto)); }`) jo caller ko chhota syntax de (`@Serialize(UserDto)` vs `@UseInterceptors(new SerializeInterceptor(UserDto))`). Isi project me [Step 12](#step-12-reusable-serialize-decorator-banaya) me yehi refactor kiya gaya — pehle interceptor hardcoded `UserDto` pe tha, ab kisi bhi DTO ke saath reuse ho sakta hai.
+
+**Q: Agar `intercept()` me `this.dto` use karne ke bajaye galti se hardcoded class reference reh jaaye, to kya problem hogi?**
+Constructor to DTO accept karega aur type-check bhi pass ho jayega (kyunki `dto` ka type abhi `any` hai), lekin **runtime pe koi effect nahi hoga** — `Serialize(ReportDto)` likhne par bhi hamesha `UserDto` hi apply hota rahega. Ye TypeScript ke `any` type ka ek classic risk hai: `any` compiler ko silent kar deta hai, isliye ye class ki bug compile-time pe pakdi nahi jaati, sirf runtime behavior galat hone se pata chalti hai — isi project me ye exact bug mila tha aur fix kiya gaya.
 
 ### JavaScript / TypeScript Fundamentals
 
