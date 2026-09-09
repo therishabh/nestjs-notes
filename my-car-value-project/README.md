@@ -23,6 +23,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 13: AuthService — Password Hashing](#step-13-authservice--password-hashing)
   - [Step 14: `bcrypt` se Password Hashing (Learning Demo)](#step-14-bcrypt-se-password-hashing-learning-demo)
   - [Step 15: Signin Endpoint (Login) Banaya](#step-15-signin-endpoint-login-banaya)
+  - [Step 16: `AuthV2Service` — bcrypt-Based Auth, Routes Switch Kiye](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -50,7 +51,8 @@ my-car-value-project/
     ├── users/
     │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup + signin (dono AuthService ko delegate), get by id, list/search, update, delete
     │   ├── users.service.ts             # Users se related PLAIN DB CRUD — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
-    │   ├── auth.service.ts              # Signup (duplicate-email check + scrypt hashing) aur signin (salt.hash verify) workflows, phir UsersService ko delegate karta hai
+    │   ├── auth.service.ts              # OLD — hand-rolled scrypt signup/signin, ab kisi route se use nahi hota (reference ke liye rakha), dekho Step 16
+    │   ├── auth-v2.service.ts           # CURRENT — signup/signin `/auth/signup` aur `/auth/signin` yahi handle karte hain, bcrypt hashing + exact-match email lookup
     │   ├── bcrypt-auth.service.ts       # Learning demo — `bcrypt` library se hash/compare (koi controller isse abhi use nahi karta)
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
     │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (partial update) + `UserDto` (safe response shape, password exclude) — sab request/response shapes
@@ -682,6 +684,89 @@ Kuch important cheezein:
 
 **Known gap (jaan-bujh kar abhi fix nahi kiya)**: "Email id not found" aur "Password not correct" — do alag error messages dena real-world production apps me ek **user enumeration** security anti-pattern maana jaata hai, kyunki isse attacker ko pata chal jaata hai ki koi particular email DB me exist karta hai ya nahi (phir wo sirf usi email pe password guess karne me focus kar sakta hai). Production-grade app me dono cases me ek hi generic message (jaise "Invalid credentials") bhejna safer hota hai — is project ka scope abhi learning-focused hai isliye specific messages rakhe gaye, lekin ye ek real trade-off hai jo interview me discuss karne layak hai.
 
+**Ye gap Step 16 me fix ho gaya** — `signin`/`signup` routes ab `AuthService` (upar wala) ki jagah ek naye, zyada production-grade `AuthV2Service` ko delegate karte hain.
+
+### Step 16: `AuthV2Service` — bcrypt-Based Auth, Routes Switch Kiye
+
+Step 13-15 ka hand-rolled `crypto.scrypt` approach (`AuthService`, `auth.service.ts`) kaam to kar raha tha, lekin usme kuch cheezein ek production codebase ke standard se neeche thi:
+
+1. **`usersService.find(email)` "contains" search se auth karna** — ye method Step 10 me `Like('%value%')` se ban gaya tha (admin-style partial search ke liye), signup/signin jaisi auth-critical jagah pe isse reuse karna galat tha — technically `find('john')` na sirf `john@x.com` balki `johnny@x.com` ko bhi match kar sakta tha.
+2. **Manual `!==` se hash compare karna** — ye **timing attack** ke against safe nahi hai (string comparison character-by-character rukti hai jaise hi mismatch milta hai, isse response-time se thoda-thoda info leak ho sakta hai). Isके liye `crypto.timingSafeEqual()` ya ek library jo khud constant-time compare kare, use karna chahiye tha.
+3. **Salt/hash ka manual bookkeeping** (`randomBytes(8)`, `salt + '.' + hash`) — kaam karta hai, lekin har extra manual step ek naya bug-surface hai.
+4. **"Email not found" vs "Password not correct" alag messages** — user enumeration gap (upar Step 15 me discuss ho chuka).
+
+Fix karne ke liye ek naya, self-contained **`AuthV2Service`** banaya (`users/auth-v2.service.ts`) — purana `auth.service.ts` jaan-bujh kar **bilkul chhoda nahi gaya** (learning-reference ke liye codebase me hai, bas ab kisi route se use nahi hota):
+
+```ts
+// users/auth-v2.service.ts
+const SALT_ROUNDS = 10;
+
+@Injectable()
+export class AuthV2Service {
+  constructor(
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+  ) {}
+
+  async signup(email: string, password: string): Promise<User> {
+    const existingUser = await this.usersRepository.findOneBy({ email });
+    if (existingUser) {
+      throw new BadRequestException('Email is already in use');
+    }
+
+    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+    const user = this.usersRepository.create({ email, password: hashedPassword });
+
+    return this.usersRepository.save(user);
+  }
+
+  async signin(email: string, password: string): Promise<User> {
+    const user = await this.usersRepository.findOneBy({ email });
+    const isPasswordValid = user
+      ? await bcrypt.compare(password, user.password)
+      : false;
+
+    if (!user || !isPasswordValid) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    return user;
+  }
+}
+```
+
+Kya-kya badla, aur kyun:
+
+- **`findOneBy({ email })` — exact match** — `UsersService.find()` (Like-based) ke bajaye seedha `Repository<User>` inject karke exact-equality lookup kiya. Ye AuthV2Service ka apna repository access hai (`UsersService` ko is baar bypass kiya) taaki auth ka correctness kisi doosre feature (search) ke implementation detail pe depend na kare.
+- **`bcrypt.hash()` / `bcrypt.compare()`** — Step 14 me demo ke roop me explore kiya gaya `bcrypt` (dekho [Step 14](#step-14-bcrypt-se-password-hashing-learning-demo)) yaha real flow me use kiya. Salt generate karna, salt store karna, aur verify karne ke liye constant-time compare karna — sab `bcrypt` internally handle karta hai, isliye manual `salt + '.' + hash` jodne/todne wala code poora hat gaya.
+- **`UnauthorizedException` (401), generic message** — "Email is already in use" (signup, `400 Bad Request` — client ne galat/duplicate data bheja) alag rakha, lekin signin fail hone pe (chahe email na mile, chahe password galat ho) **ek hi** `UnauthorizedException('Invalid email or password')` (`401`) throw hota hai — na alag message, na alag status per-case, isliye ab attacker response se ye pata nahi laga sakta ki email exist karta hai ya nahi.
+- **`SALT_ROUNDS` named constant** — magic number (`10`) ko ek naam diya, taaki cost factor kahi bhi likha ho to samajhna aasan ho.
+
+**`users.controller.ts`** — `create()`/`signIn()` dono routes ab `AuthService` ki jagah `AuthV2Service` ko delegate karte hain:
+
+```ts
+constructor(
+  private readonly usersService: UsersService,
+  private readonly authV2Service: AuthV2Service,
+) {}
+
+@Post('/signup')
+@Serialize(UserDto)
+create(@Body() bodyData: CreateUserDto) {
+  return this.authV2Service.signup(bodyData.email, bodyData.password);
+}
+
+@Post('/signin')
+@Serialize(UserDto)
+signIn(@Body() bodyData: CreateUserDto) {
+  return this.authV2Service.signin(bodyData.email, bodyData.password);
+}
+```
+
+`AuthService` (`auth.service.ts`) `users.module.ts` ke `providers` me abhi bhi registered hai (compile hota hai, DI container me valid provider hai), bas ab koi controller route isse call nahi karta — `BcryptAuthService` jaisa hi ek "reference/demo" provider ban gaya hai.
+
+Manually test kiya gaya (`POST /auth/signup`, duplicate signup, correct signin, galat password, na-existing email) — sab expected status codes ke saath kaam kar rahe hain (`201`/`400`/`401`), aur dono cases (galat password / na-existing email) me response body hamesha same generic `"Invalid email or password"` deta hai.
+
 ---
 
 ## Concepts Glossary
@@ -742,6 +827,10 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **Array Destructuring (`const [user] = ...`)** | [Step 15](#step-15-signin-endpoint-login-banaya) | `find()` jaisa array-returning method ka pehla element seedha ek variable me nikal leta hai — agar array khaali ho to variable `undefined` ban jaata hai, jo "not found" check ke liye kaam aata hai | |
 | **Password Verification (hash-and-compare)** | [Step 15](#step-15-signin-endpoint-login-banaya) | Login ke time stored `salt.hash` ko `.split('.')` se todkar salt nikala jaata hai, incoming plain password ko usi salt se dobara hash kiya jaata hai, aur dono hashes string-compare kiye jaate hain — kyunki hashing deterministic hoti hai (same input = same output) | |
 | **User Enumeration (security anti-pattern)** | [Step 15](#step-15-signin-endpoint-login-banaya) | Jab login/signup jaisi API "email exist nahi karta" aur "password galat hai" ke liye ALAG error messages deti hai — attacker inhi se pata laga sakta hai ki koi email DB me registered hai ya nahi | |
+| **`findOneBy({ email })` for auth (exact match)** | [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) | Auth-critical lookups (signup duplicate-check, signin) ke liye search-purpose `Like()` method reuse karne ke bajaye seedha repository se exact-equality query — correctness aur intent dono clear rehte hain | |
+| **`crypto.timingSafeEqual()` / library-handled constant-time compare** | [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) | Do secrets (hash) ko plain `===`/`!==` se compare karna timing attack ke against unsafe hai (mismatch pe jaldi return hota hai, isse response-time se info leak ho sakta hai) — `bcrypt.compare()` jaisi library khud constant-time compare karti hai | |
+| **`UnauthorizedException` (401) for auth failure** | [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) | HTTP semantics ke hisaab se authentication fail hone pe `401` sahi status hai (`400 BadRequest` "request malformed/duplicate hai" ke liye reserve rehta hai, e.g. signup duplicate email) | |
+| **Service Versioning (`AuthService` vs `AuthV2Service`)** | [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) | Purani implementation delete/edit karne ke bajaye ek naye file/class me improved version banaya, controller ko naye service pe switch kiya, purana reference ke liye codebase me chhod diya (registered rehta hai, bas kisi route se use nahi hota) | |
 
 ---
 

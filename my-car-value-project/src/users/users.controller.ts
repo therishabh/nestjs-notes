@@ -16,21 +16,23 @@ import { UsersService } from './users.service';
 // karne ki zaroorat nahi, sirf `Serialize` hi kaafi hai
 import { Serialize } from 'src/interceptors/serialize.interceptor';
 import { UserDto } from 'src/users/user.dto';
-// AuthService — signup ka poora workflow (duplicate-email check + password hashing)
-// yahi handle karta hai, dekho src/users/auth.service.ts
-import { AuthService } from './auth.service';
+// AuthV2Service — signup/signin ka poora workflow (bcrypt hashing, exact-match email
+// lookup) yahi handle karta hai, dekho src/users/auth-v2.service.ts. Purana AuthService
+// (src/users/auth.service.ts, hand-rolled scrypt) ab kisi route se use nahi hota, sirf
+// reference/comparison ke liye codebase me rakha gaya hai.
+import { AuthV2Service } from './auth-v2.service';
 
 // @Controller('auth') is class ke saare routes ke aage `/auth` prefix laga deta hai
 // (isliye neeche wala route asal me `/auth/signup` pe hit hota hai)
 @Controller('auth')
 export class UsersController {
   // Dono services inject kiye — UsersService abhi bhi findUser/findAllUsers/update/remove
-  // ke liye direct use ho raha hai, lekin signup ab AuthService ko delegate hota hai
+  // ke liye direct use ho raha hai, signup/signin AuthV2Service ko delegate hote hain
   // (Nest DI container dono ko khud instantiate karke de deta hai, users.module.ts ke
-  // `providers: [UsersService, AuthService]` array me registered hone ki wajah se)
+  // `providers: [UsersService, ..., AuthV2Service]` array me registered hone ki wajah se)
   constructor(
     private readonly usersService: UsersService,
-    private readonly authService: AuthService,
+    private readonly authV2Service: AuthV2Service,
   ) {}
 
   // POST /auth/signup — naya user create karne ka endpoint
@@ -42,17 +44,11 @@ export class UsersController {
     // `email`/`password` ko CreateUserDto ke decorators (@IsEmail, @IsString) se validate kar chuka hota hai —
     // agar validation fail ho to controller ka code chalta hi nahi, seedha 400 error chala jaata hai
     //
-    // Pehle yaha seedha `usersService.create()` call hota tha — ab `authService.signup()`
-    // call hota hai, jo internally duplicate-email check karta hai, password ko hash karta
-    // hai, aur PHIR `usersService.create()` ko call karta hai. Controller ko is internal
-    // detail se koi matlab nahi — controller sirf "signup karo" bolta hai, KAISE hota hai
-    // wo AuthService ki responsibility hai (separation of concerns).
-    //
-    // authService.signup() ek Promise<User> return karta hai — isliye yaha `return` kiya,
-    // taaki Nest is Promise ko resolve karke response body me saved user bhej de, warna
-    // client ko empty response milta. `@Serialize(UserDto)` bhi laga hai, isliye response
-    // me `password` (chahe ab wo hashed hi kyun na ho) kabhi client tak nahi jaayega.
-    return this.authService.signup(bodyData.email, bodyData.password);
+    // Controller ko signup ke internal detail (hashing kaise, duplicate-check kaise) se
+    // koi matlab nahi — sirf "signup karo" bolta hai, KAISE hota hai wo AuthV2Service ki
+    // responsibility hai (separation of concerns). `return` isliye kiya taaki Nest is
+    // returned Promise ko resolve karke response body me saved user bhej de.
+    return this.authV2Service.signup(bodyData.email, bodyData.password);
   }
 
   // POST /auth/signin — existing user login karne ka endpoint. Signup jaisa hi
@@ -61,10 +57,10 @@ export class UsersController {
   @Post('/signin')
   @Serialize(UserDto)
   signIn(@Body() bodyData: CreateUserDto) {
-    // authService.signin() email+password verify karta hai (dekho src/users/auth.service.ts)
+    // authV2Service.signin() email+password verify karta hai (dekho src/users/auth-v2.service.ts)
     // aur match hone par poora `User` return karta hai — `@Serialize(UserDto)` yaha bhi
     // laga hai, isliye response me `password` (hashed hi sahi) kabhi client tak nahi jaayega
-    return this.authService.signin(bodyData.email, bodyData.password);
+    return this.authV2Service.signin(bodyData.email, bodyData.password);
   }
 
   // @Serialize(UserDto) — custom decorator (dekho src/interceptors/serialize.interceptor.ts)
