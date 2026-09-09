@@ -34,7 +34,11 @@ Legend: 🔥🔥🔥 Very Important &nbsp;|&nbsp; 🔥🔥 Important &nbsp;|&nbs
 14. [System Design Questions](#14-system-design-questions)
 15. [Real-World Scenario Questions](#15-real-world-scenario-questions)
 16. [Senior/Lead/Architect-Only Questions](#16-seniorleadarchitect-only-questions)
-17. [Final Interview Preparation Priority](#17-final-interview-preparation-priority)
+17. [Observability, DevOps & CI/CD](#17-observability-devops--cicd)
+18. [Full-Stack & Real-Time Systems](#18-full-stack--real-time-systems)
+19. [TypeScript for Backend Engineers](#19-typescript-for-backend-engineers)
+20. [Leadership & Team Practices (Lead/Architect)](#20-leadership--team-practices-leadarchitect)
+21. [Final Interview Preparation Priority](#21-final-interview-preparation-priority)
 
 ---
 
@@ -418,7 +422,72 @@ These probe leadership, trade-off reasoning, and system-level ownership — expe
 
 ---
 
-## 17. Final Interview Preparation Priority
+## 17. Observability, DevOps & CI/CD
+
+| Question | Priority |
+|---|---|
+| How do you instrument a NestJS app with Prometheus metrics (request duration histograms, error rate counters)? | 🔥🔥🔥 |
+| What's the difference between metrics, logs, and traces, and how do the three pillars of observability fit together? | 🔥🔥🔥 |
+| How do you set up distributed tracing with OpenTelemetry across an HTTP call → queue → consumer chain? | 🔥🔥🔥 |
+| How do you define meaningful SLIs/SLOs/error budgets for an API, and what do you do when the error budget is burned? | 🔥🔥 |
+| How do you write a Dockerfile for a NestJS app optimized for image size and build cache (multi-stage builds)? | 🔥🔥🔥 |
+| How do you design a CI/CD pipeline for a Node.js service (lint → test → build → security scan → deploy)? | 🔥🔥🔥 |
+| What's the difference between liveness and readiness probes in Kubernetes, and how do you implement them correctly (avoid a probe that passes while dependencies are down)? | 🔥🔥🔥 |
+| How do you implement feature flags for progressive rollout, and how do they interact with your caching layer? | 🔥🔥 |
+| How do you perform a blue-green or canary deployment for a stateful Node.js service? | 🔥🔥 |
+| How do you manage configuration differences across environments (dev/staging/prod) safely (`@nestjs/config` with schema validation)? | 🔥🔥 |
+| How do you handle database migrations as part of a CI/CD pipeline without causing downtime during deploy? | 🔥🔥🔥 |
+| What alerting would you set up for a newly launched service, and how do you avoid alert fatigue? | 🔥🔥 |
+
+---
+
+## 18. Full-Stack & Real-Time Systems
+
+| Question | Priority |
+|---|---|
+| How do you design a Backend-for-Frontend (BFF) layer, and when is it worth the extra service? | 🔥🔥 |
+| How do you keep API contracts in sync between frontend and backend (OpenAPI-generated clients, tRPC, shared TypeScript types in a monorepo)? | 🔥🔥🔥 |
+| How do you scale WebSocket connections across multiple NestJS instances (Redis adapter for Socket.IO, sticky sessions vs. connection-state externalization)? | 🔥🔥🔥 |
+| How do you authenticate a WebSocket connection, and how do you handle token expiry mid-connection? | 🔥🔥🔥 |
+| How would you implement optimistic UI updates on the frontend backed by a reliable reconciliation strategy on the backend? | 🔥🔥 |
+| How do you resolve the N+1 query problem in GraphQL specifically, using `DataLoader`, in a NestJS GraphQL resolver? | 🔥🔥🔥 |
+| How do you design a reliable webhook delivery system (signing payloads, retries with backoff, replay protection)? | 🔥🔥🔥 |
+| How do you handle server-side rendering (SSR) or streaming responses from a Node.js backend feeding a React/Next.js frontend? | 🔥🔥 |
+| How do you design file/image upload with direct-to-S3 pre-signed URLs instead of proxying through your API? | 🔥🔥 |
+| How do you keep long-running operations (report generation, exports) from blocking the request cycle — polling vs. WebSocket push vs. Server-Sent Events? | 🔥🔥🔥 |
+
+---
+
+## 19. TypeScript for Backend Engineers
+
+| Question | Priority |
+|---|---|
+| How do decorators and `reflect-metadata` work together to power NestJS's DI and validation? | 🔥🔥🔥 |
+| Explain structural typing vs. nominal typing, and a case where TypeScript's structural typing surprised you | 🔥🔥 |
+| How do you use discriminated unions to model API response variants (success/error) in a type-safe way? | 🔥🔥 |
+| What's the difference between `interface` and `type`, and when does it actually matter for DTOs? | 🔥 |
+| How do you enforce strict null checks and avoid runtime `undefined` errors in a large NestJS codebase? | 🔥🔥 |
+| How do you share types between a NestJS backend and a frontend/consumer without tight coupling (shared packages, code generation from OpenAPI/GraphQL schema)? | 🔥🔥 |
+| How do you type a generic repository or service pattern in TypeScript (generics with constraints)? | 🔥🔥 |
+
+---
+
+## 20. Leadership & Team Practices (Lead/Architect)
+
+| Question | Priority |
+|---|---|
+| How do you run effective code reviews for a backend team — what do you insist on vs. let go? | 🔥🔥🔥 |
+| How do you onboard a new engineer onto a complex NestJS microservices codebase quickly? | 🔥🔥 |
+| How do you handle a disagreement with another senior engineer over an architectural decision? | 🔥🔥🔥 |
+| How do you decide what goes into a shared library vs. what stays duplicated across services? | 🔥🔥 |
+| Describe a time you had to push back on a product deadline for technical reasons — how did you communicate it? | 🔥🔥🔥 |
+| How do you set coding standards (linting, formatting, architectural conventions) across multiple teams? | 🔥🔥 |
+| How do you approach technical interviews/hiring for backend roles on your team? | 🔥 |
+| How do you keep a growing microservices estate from becoming unmanageable ("distributed monolith" anti-pattern)? | 🔥🔥🔥 |
+
+---
+
+## 21. Final Interview Preparation Priority
 
 If you only have limited time before the interview, focus in this order:
 
