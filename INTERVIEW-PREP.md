@@ -38,7 +38,8 @@ Legend: 🔥🔥🔥 Very Important &nbsp;|&nbsp; 🔥🔥 Important &nbsp;|&nbs
 18. [Full-Stack & Real-Time Systems](#18-full-stack--real-time-systems)
 19. [TypeScript for Backend Engineers](#19-typescript-for-backend-engineers)
 20. [Leadership & Team Practices (Lead/Architect)](#20-leadership--team-practices-leadarchitect)
-21. [Final Interview Preparation Priority](#21-final-interview-preparation-priority)
+21. [Full-Stack Cross-Stack Essentials](#21-full-stack-cross-stack-essentials)
+22. [Final Interview Preparation Priority](#22-final-interview-preparation-priority)
 
 ---
 
@@ -487,7 +488,40 @@ These probe leadership, trade-off reasoning, and system-level ownership — expe
 
 ---
 
-## 21. Final Interview Preparation Priority
+## 21. Full-Stack Cross-Stack Essentials
+
+Questions that specifically target the "full-stack" part of your profile — HTTP/browser fundamentals, tooling, and things that sit between frontend and backend. Frequently asked for Full-Stack Engineer roles even when the interviewer is backend-heavy.
+
+| Question | Priority |
+|---|---|
+| Explain the full HTTP request lifecycle from typing a URL to render (DNS lookup → TCP/TLS handshake → request → response → parse/render) | 🔥🔥🔥 |
+| Explain caching headers (`Cache-Control`, `ETag`, `Last-Modified`) and how the browser, CDN, and your API should cooperate on them | 🔥🔥🔥 |
+| Cookies vs. `localStorage` vs. `sessionStorage` for storing auth tokens — security trade-offs (`HttpOnly`, `Secure`, `SameSite`) | 🔥🔥🔥 |
+| Explain the CORS preflight request in detail — when does the browser send `OPTIONS`, and what headers must your API return? | 🔥🔥🔥 |
+| What is the Same-Origin Policy, and how do `SameSite=Strict/Lax/None` cookies interact with cross-site requests? | 🔥🔥 |
+| HTTP/1.1 vs HTTP/2 vs HTTP/3 — what changed and why does it matter for API performance (multiplexing, head-of-line blocking)? | 🔥🔥 |
+| How do you design an API response shape and error contract that's easy for a frontend team to consume consistently? | 🔥🔥🔥 |
+| WebSockets vs Server-Sent Events vs long polling vs short polling — how do you choose for a given real-time feature? | 🔥🔥🔥 |
+| How do you keep environment variables/config in sync and secure across a frontend build and a backend service in the same repo? | 🔥🔥 |
+| How do you structure a monorepo with a frontend app and a NestJS backend (npm/pnpm workspaces, Nx/Turborepo) — shared types, shared lint/test config? | 🔥🔥🔥 |
+| How do you set up end-to-end tests that span frontend and backend (Playwright/Cypress hitting a real or seeded test backend)? | 🔥🔥🔥 |
+| How do you handle authentication state and token refresh gracefully on the frontend without breaking in-flight API calls (Axios/Fetch interceptors)? | 🔥🔥🔥 |
+| What are Micro-Frontends, and when would you actually reach for them vs. a single frontend app talking to multiple backend services? | 🔥🔥 |
+| How does GraphQL Federation/schema stitching work when multiple backend teams own different parts of a graph? | 🔥🔥 |
+| How do you handle file/image optimization and delivery across the stack (resizing on upload, CDN, responsive `srcset`)? | 🔥 |
+| How would you implement server-driven UI or feature flags that affect both frontend rendering and backend behavior consistently? | 🔥🔥 |
+| How do you approach SEO for a full-stack app using SSR/SSG (Next.js) — what does the backend need to provide (meta tags, sitemaps, structured data)? | 🔥🔥 |
+| How do you diagnose whether a slow page load is a frontend problem (bundle size, render-blocking JS) or a backend problem (slow API/TTFB)? | 🔥🔥🔥 |
+| How do you version and roll out a breaking API change without breaking an already-deployed frontend (old mobile app clients, cached SPA bundles)? | 🔥🔥🔥 |
+| How do you handle real-time form validation/optimistic updates on the frontend while keeping the backend as the source of truth? | 🔥🔥 |
+| How would you implement a "who's online" / presence feature end-to-end (WebSocket connection tracking + Redis + frontend UI updates)? | 🔥🔥 |
+| What's your approach to sharing validation logic (e.g., a signup form schema) between frontend and backend without duplicating it (Zod schemas, shared package)? | 🔥🔥 |
+| How do you handle third-party API rate limits gracefully across both a backend proxy layer and the frontend UI (loading states, retries, backoff)? | 🔥🔥 |
+| How do you set up local development so frontend and backend (and maybe a DB/Redis) all run together reliably (Docker Compose, `.env` management)? | 🔥🔥 |
+
+---
+
+## 22. Final Interview Preparation Priority
 
 If you only have limited time before the interview, focus in this order:
 
