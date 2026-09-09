@@ -24,6 +24,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 14: `bcrypt` se Password Hashing (Learning Demo)](#step-14-bcrypt-se-password-hashing-learning-demo)
   - [Step 15: Signin Endpoint (Login) Banaya](#step-15-signin-endpoint-login-banaya)
   - [Step 16: `AuthV2Service` — bcrypt-Based Auth, Routes Switch Kiye](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye)
+  - [Step 17: Cookie Sessions — `/auth/me` Se Logged-In User Pata Karna](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -42,14 +43,14 @@ App design aur planning ke screenshots — kya banana hai iska rough sketch:
 ```
 my-car-value-project/
 └── src/
-    ├── main.ts                          # App bootstrap — AppModule ko root bana kar NestFactory se app create/listen karta hai, global ValidationPipe bhi yahi lagta hai
+    ├── main.ts                          # App bootstrap — AppModule ko root bana kar NestFactory se app create/listen karta hai, `cookie-session` middleware + global ValidationPipe bhi yahi lagte hain
     ├── app.module.ts                    # Root module — TypeOrmModule.forRoot() se DB connect karta hai, UsersModule aur ReportsModule import karta hai
     ├── app.controller.ts                # Default scaffold controller (GET /)
     ├── app.service.ts                   # Default scaffold service
     ├── interceptors/
     │   └── serialize.interceptor.ts     # `SerializeInterceptor` (reusable, DTO constructor-param leta hai) + `Serialize()` decorator factory — response ko target DTO shape me convert karta hai (password chhupane ke liye)
     ├── users/
-    │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup + signin (dono AuthService ko delegate), get by id, list/search, update, delete
+    │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup + signin (dono AuthV2Service ko delegate, session set karte hain), `/me` (session se current user), get by id, list/search, update, delete
     │   ├── users.service.ts             # Users se related PLAIN DB CRUD — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
     │   ├── auth.service.ts              # OLD — hand-rolled scrypt signup/signin, ab kisi route se use nahi hota (reference ke liye rakha), dekho Step 16
     │   ├── auth-v2.service.ts           # CURRENT — signup/signin `/auth/signup` aur `/auth/signin` yahi handle karte hain, bcrypt hashing + exact-match email lookup
@@ -767,6 +768,72 @@ signIn(@Body() bodyData: CreateUserDto) {
 
 Manually test kiya gaya (`POST /auth/signup`, duplicate signup, correct signin, galat password, na-existing email) — sab expected status codes ke saath kaam kar rahe hain (`201`/`400`/`401`), aur dono cases (galat password / na-existing email) me response body hamesha same generic `"Invalid email or password"` deta hai.
 
+### Step 17: Cookie Sessions — `/auth/me` Se Logged-In User Pata Karna
+
+Ab tak signup/signin sirf ek baar ke liye user verify karte the — response ke baad server ko yaad nahi rehta tha ki kaun logged in hai. Isko fix karne ke liye **`cookie-session`** (stateless, signed-cookie-based session) wire kiya, aur ek naya `GET /auth/me` route banaya jo bata sake "abhi kaun logged in hai".
+
+**`main.ts`** — session middleware sabse pehle register kiya, taaki har request pe `req.session` available ho:
+
+```ts
+import cookieSession from 'cookie-session';
+
+app.use(
+  cookieSession({
+    keys: [process.env.COOKIE_SESSION_KEY ?? 'dev-only-secret-key'],
+  }),
+);
+```
+
+- **`cookie-session` vs `express-session`** — `express-session` session data ko **server-side** (memory/DB/Redis) store karta hai, client ko sirf ek session-id cookie milta hai. `cookie-session` iske ulat hai — poora session data (yaha sirf `{ userId }`) khud ek **signed cookie** me client ke paas store hota hai, server kuch bhi store nahi karta (stateless) — chhote projects/learning ke liye simpler hai, lekin cookie size limit (~4KB) aur "client dekh sakta hai (base64, encrypted nahi)" jaisi trade-offs hain.
+- **`keys`** — cookie ko sign karne ke liye secret(s), taaki client cookie ko tamper na kar sake (server verify kar sake ki cookie usi ne banaya tha). Yaha `process.env.COOKIE_SESSION_KEY` use kiya (dev fallback ke saath) — [Step 3](#step-3-typeorm--sqlite-setup-kiya) jaisa hi pattern, production me isse hamesha env variable se aana chahiye, hardcoded nahi.
+- **Order matters** — ye middleware `ValidationPipe` lagne se **pehle** lagaya, kyunki agar baad me lagate to jo routes session use karte hain unme `req.session` abhi `undefined` hota (middleware register hone se pehle koi bhi request usse access nahi kar sakti).
+
+**`users.controller.ts`** — `@Session()` decorator (`@nestjs/common`) se `req.session` inject kiya jaata hai. Iska return type khud `any` hota hai, isliye ek chhota local interface banaya:
+
+```ts
+interface AuthSession {
+  userId?: number;
+}
+```
+
+Signup aur signin dono ab response bhejne se pehle `session.userId = user.id` set kar dete hain — matlab signup ke turant baad user automatically "logged in" bhi ho jaata hai, alag se signin call karne ki zaroorat nahi:
+
+```ts
+@Post('/signup')
+@Serialize(UserDto)
+async create(@Body() bodyData: CreateUserDto, @Session() session: AuthSession) {
+  const user = await this.authV2Service.signup(bodyData.email, bodyData.password);
+  session.userId = user.id;
+  return user;
+}
+```
+
+Naya route — `GET /auth/me` — sirf session se hi bata deta hai ki kaun logged in hai, koi request body/param nahi chahiye:
+
+```ts
+@Get('/me')
+@Serialize(UserDto)
+async getMeInfo(@Session() session: AuthSession) {
+  if (!session.userId) {
+    throw new UnauthorizedException('Not signed in');
+  }
+
+  const user = await this.usersService.findOne(session.userId);
+  if (!user) {
+    throw new NotFoundException('user not found');
+  }
+
+  return user;
+}
+```
+
+Kuch important cheezein:
+
+- **`session.userId?: number` optional hai** — agar user signed-in nahi hai (ya cookie expire/missing hai), `session.userId` `undefined` hoga, isliye pehla check hamesha `if (!session.userId)` → `401 Unauthorized`. Ye check na hota to `usersService.findOne(undefined)` jaisa invalid call chala jaata.
+- **`@Get('/me')` ko `@Get('/:id')` se PEHLE declare kiya** — Express/Nest routes **declaration order** me match karte hain. Agar `/:id` pehle hota, to `GET /auth/me` request `id = "me"` bankar `findUser` route pe chali jaati (aur `parseInt("me")` → `NaN` deta, silently galat behavior). Static routes (`/me`) ko hamesha apne dynamic siblings (`/:id`) se **upar** rakhna chahiye — ye ek common real-world routing gotcha hai.
+- **`findUser` (`GET /auth/:id`) bhi ab session set karta hai** — jab koi bhi user ka profile fetch hota hai, session me uska `userId` bhi save ho jaata hai (chhota inconsistency/gap: normally sirf apna khud ka login state set karna chahiye, kisi doosre user ko dekhne se apna session badalna nahi chahiye — is project ka current behavior hai, real app me isse alag rakha jaata).
+- **`db.sqlite` restart pe reset nahi hoti** — related confusion clarify karne layak: `synchronize: true` sirf schema (tables/columns) ko entities se sync karta hai, koi `dropSchema` nahi laga, isliye server restart karne pe existing users/data **persist** rehta hai, delete nahi hota (jab tak khud manually file delete na ki jaaye).
+
 ---
 
 ## Concepts Glossary
@@ -831,6 +898,10 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`crypto.timingSafeEqual()` / library-handled constant-time compare** | [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) | Do secrets (hash) ko plain `===`/`!==` se compare karna timing attack ke against unsafe hai (mismatch pe jaldi return hota hai, isse response-time se info leak ho sakta hai) — `bcrypt.compare()` jaisi library khud constant-time compare karti hai | |
 | **`UnauthorizedException` (401) for auth failure** | [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) | HTTP semantics ke hisaab se authentication fail hone pe `401` sahi status hai (`400 BadRequest` "request malformed/duplicate hai" ke liye reserve rehta hai, e.g. signup duplicate email) | |
 | **Service Versioning (`AuthService` vs `AuthV2Service`)** | [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) | Purani implementation delete/edit karne ke bajaye ek naye file/class me improved version banaya, controller ko naye service pe switch kiya, purana reference ke liye codebase me chhod diya (registered rehta hai, bas kisi route se use nahi hota) | |
+| **`cookie-session`** | [Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna) | Session middleware jo poora session data (server-side store nahi) seedha ek **signed cookie** me client ke paas rakhta hai — stateless, chhote apps ke liye simple, lekin cookie size limit aur data-not-encrypted (sirf signed) jaisi trade-offs hoti hain | |
+| **`@Session()` decorator** | [Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna) | `@nestjs/common` ka parameter decorator jo controller method me `req.session` inject karta hai — value `any` type ki hoti hai, isliye apna explicit interface likhna best practice hai | |
+| **Static vs Dynamic Route Order (`/me` vs `/:id`)** | [Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna) | Routes declaration-order me match hote hain — ek static path (`/me`) apne dynamic sibling (`/:id`) se PEHLE declare karna zaroori hai, warna dynamic route usse "eat" kar leta hai (`id = "me"` bankar) | |
+| **`synchronize: true` vs `dropSchema`** | [Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna) | `synchronize: true` sirf DB schema (tables/columns) ko entities se sync karta hai — existing rows delete nahi karta. Server restart karne pe data persist rehta hai; sirf `dropSchema: true` (jo yaha kabhi use nahi hua) ya manual file-delete se data uda hai | |
 
 ---
 

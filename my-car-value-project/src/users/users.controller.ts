@@ -9,6 +9,7 @@ import {
   Put,
   NotFoundException,
   Session,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
@@ -47,7 +48,10 @@ export class UsersController {
   // POST /auth/signup — naya user create karne ka endpoint
   @Post('/signup')
   @Serialize(UserDto)
-  create(@Body() bodyData: CreateUserDto) {
+  async create(
+    @Body() bodyData: CreateUserDto,
+    @Session() session: AuthSession,
+  ) {
     // @Body() poore request body ko `CreateUserDto` me convert karta hai
     // main.ts me lagaya gaya global ValidationPipe request aane se pehle hi
     // `email`/`password` ko CreateUserDto ke decorators (@IsEmail, @IsString) se validate kar chuka hota hai —
@@ -57,7 +61,12 @@ export class UsersController {
     // koi matlab nahi — sirf "signup karo" bolta hai, KAISE hota hai wo AuthV2Service ki
     // responsibility hai (separation of concerns). `return` isliye kiya taaki Nest is
     // returned Promise ko resolve karke response body me saved user bhej de.
-    return this.authV2Service.signup(bodyData.email, bodyData.password);
+    const user = await this.authV2Service.signup(
+      bodyData.email,
+      bodyData.password,
+    );
+    session.userId = user.id;
+    return user;
   }
 
   // POST /auth/signin — existing user login karne ka endpoint. Signup jaisa hi
@@ -77,6 +86,21 @@ export class UsersController {
       bodyData.password,
     );
     session.userId = user.id;
+    return user;
+  }
+
+  @Get('/me')
+  @Serialize(UserDto)
+  async getMeInfo(@Session() session: AuthSession) {
+    if (!session.userId) {
+      throw new UnauthorizedException('Not signed in');
+    }
+
+    const user = await this.usersService.findOne(session.userId);
+    if (!user) {
+      throw new NotFoundException('user not found');
+    }
+
     return user;
   }
 
