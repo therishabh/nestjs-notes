@@ -22,6 +22,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 12: Reusable `Serialize()` Decorator Banaya](#step-12-reusable-serialize-decorator-banaya)
   - [Step 13: AuthService — Password Hashing](#step-13-authservice--password-hashing)
   - [Step 14: `bcrypt` se Password Hashing (Learning Demo)](#step-14-bcrypt-se-password-hashing-learning-demo)
+  - [Step 15: Signin Endpoint (Login) Banaya](#step-15-signin-endpoint-login-banaya)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -47,9 +48,9 @@ my-car-value-project/
     ├── interceptors/
     │   └── serialize.interceptor.ts     # `SerializeInterceptor` (reusable, DTO constructor-param leta hai) + `Serialize()` decorator factory — response ko target DTO shape me convert karta hai (password chhupane ke liye)
     ├── users/
-    │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup (AuthService ko delegate), get by id, list/search, update, delete
+    │   ├── users.controller.ts          # `/auth` prefix ke saare CRUD routes — signup + signin (dono AuthService ko delegate), get by id, list/search, update, delete
     │   ├── users.service.ts             # Users se related PLAIN DB CRUD — create/findOne/find (contains search)/update/remove, sab TypeORM Repository se
-    │   ├── auth.service.ts              # Signup workflow — duplicate-email check + scrypt password hashing, phir UsersService.create() ko delegate karta hai
+    │   ├── auth.service.ts              # Signup (duplicate-email check + scrypt hashing) aur signin (salt.hash verify) workflows, phir UsersService ko delegate karta hai
     │   ├── bcrypt-auth.service.ts       # Learning demo — `bcrypt` library se hash/compare (koi controller isse abhi use nahi karta)
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
     │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (partial update) + `UserDto` (safe response shape, password exclude) — sab request/response shapes
@@ -638,6 +639,49 @@ export class BcryptAuthService {
 
 **Sabse important seekh**: `bcrypt` ka output format (`$2b$10$<22-char-salt><31-char-hash>`) **self-describing** hai — algorithm version (`2b`), cost factor (`10`), aur salt sab usi string me embedded hain. Isse agar kal cost factor 10 se 12 badal do, purane hashes (jo `$2b$10$...` se start hote hain) bhi bina kisi problem ke verify ho payenge, kyunki `bcrypt.compare()` stored hash se hi cost/salt padh leta hai — hume kahi alag se track nahi karna padta ki kaunsa hash kis config se bana tha.
 
+### Step 15: Signin Endpoint (Login) Banaya
+
+Ab tak sirf signup (naya user banana) tha — login karne ka koi tareeka nahi tha. `AuthService` me ek naya `signin()` method aur `UsersController` me `POST /auth/signin` route add kiya, jo signup ke time bana **`salt.hash`** password ko verify karta hai:
+
+```ts
+// users/auth.service.ts
+async signin(email: string, password: string) {
+  const [user] = await this.usersService.find(email);
+  if (!user) {
+    throw new BadRequestException('Email id not found');
+  }
+
+  const [salt, storedHash] = user.password.split('.');
+
+  const hash = (await scrypt(password, salt, 32)) as Buffer;
+
+  if (storedHash !== hash.toString('hex')) {
+    throw new BadRequestException('Password not correct');
+  }
+
+  return user;
+}
+```
+
+```ts
+// users/users.controller.ts
+@Post('/signin')
+@Serialize(UserDto)
+signIn(@Body() bodyData: CreateUserDto) {
+  return this.authService.signin(bodyData.email, bodyData.password);
+}
+```
+
+Kuch important cheezein:
+
+- **`const [user] = await this.usersService.find(email)`** — `find()` (Step 10 ke `Like()` search ki wajah se) hamesha ek **array** return karta hai. Login ke liye sirf ek exact-match user chahiye, isliye array destructuring se seedha pehla element nikal liya — agar email exist nahi karta to array khaali hoga aur `user` `undefined` ban jaata hai, jisse `if (!user)` check kaam kar jaata hai.
+- **`user.password.split('.')`** — signup ke time password `salt + '.' + hash` format me joda gaya tha ([Step 13](#step-13-authservice--password-hashing)). Verify karne ke liye usi format ko wapas do parts me tod kar original **salt** nikalna zaroori hai — bina us exact salt ke dobara sahi hash compute hi nahi ho sakta.
+- **Verification logic** — incoming plain `password` ko usi `salt` ke saath dobara `scrypt()` se hash kiya jaata hai. `scrypt` **deterministic** hai (same password + same salt = hamesha same output), isliye agar user ne sahi password diya hai to ye naya hash aur DB me stored `storedHash` **exact match** karenge — agar match nahi hua, matlab password galat tha.
+- **`CreateUserDto` reuse kiya, naya `SigninDto` nahi banaya** — signup aur signin dono requests ka shape same hai (email + password), isliye existing DTO hi kaam aa gaya, extra boilerplate nahi banana pada.
+- **`@Serialize(UserDto)` yaha bhi lagaya** — signin successful hone par poora `User` entity return hota hai, lekin interceptor ki wajah se response me `password` (hashed hi sahi) client tak kabhi nahi jaata.
+
+**Known gap (jaan-bujh kar abhi fix nahi kiya)**: "Email id not found" aur "Password not correct" — do alag error messages dena real-world production apps me ek **user enumeration** security anti-pattern maana jaata hai, kyunki isse attacker ko pata chal jaata hai ki koi particular email DB me exist karta hai ya nahi (phir wo sirf usi email pe password guess karne me focus kar sakta hai). Production-grade app me dono cases me ek hi generic message (jaise "Invalid credentials") bhejna safer hota hai — is project ka scope abhi learning-focused hai isliye specific messages rakhe gaye, lekin ye ek real trade-off hai jo interview me discuss karne layak hai.
+
 ---
 
 ## Concepts Glossary
@@ -695,6 +739,9 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`bcrypt.hash(pw, saltRounds)`** | [Step 14](#step-14-bcrypt-se-password-hashing-learning-demo) | Salt generate + hashing dono ek call me karta hai, aur ek self-describing string return karta hai (`$2b$10$...`) jisme algorithm version, cost, salt, hash sab embedded hote hain | [`3ae85d5`](https://github.com/therishabh/nestjs-notes/commit/3ae85d5) |
 | **`bcrypt.compare(pw, hash)`** | [Step 14](#step-14-bcrypt-se-password-hashing-learning-demo) | Stored hash se salt/cost khud nikaal kar plain password ko dobara hash karta hai aur constant-time (timing-attack-safe) compare karta hai | [`3ae85d5`](https://github.com/therishabh/nestjs-notes/commit/3ae85d5) |
 | **Salt Rounds / Cost Factor** | [Step 14](#step-14-bcrypt-se-password-hashing-learning-demo) | Batata hai kitne hashing rounds chalenge (`2^saltRounds`) — jitna zyada utna slow/secure; 10-12 industry-standard hai | [`3ae85d5`](https://github.com/therishabh/nestjs-notes/commit/3ae85d5) |
+| **Array Destructuring (`const [user] = ...`)** | [Step 15](#step-15-signin-endpoint-login-banaya) | `find()` jaisa array-returning method ka pehla element seedha ek variable me nikal leta hai — agar array khaali ho to variable `undefined` ban jaata hai, jo "not found" check ke liye kaam aata hai | |
+| **Password Verification (hash-and-compare)** | [Step 15](#step-15-signin-endpoint-login-banaya) | Login ke time stored `salt.hash` ko `.split('.')` se todkar salt nikala jaata hai, incoming plain password ko usi salt se dobara hash kiya jaata hai, aur dono hashes string-compare kiye jaate hain — kyunki hashing deterministic hoti hai (same input = same output) | |
+| **User Enumeration (security anti-pattern)** | [Step 15](#step-15-signin-endpoint-login-banaya) | Jab login/signup jaisi API "email exist nahi karta" aur "password galat hai" ke liye ALAG error messages deti hai — attacker inhi se pata laga sakta hai ki koi email DB me registered hai ya nahi | |
 
 ---
 

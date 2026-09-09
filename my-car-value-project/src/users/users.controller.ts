@@ -55,6 +55,18 @@ export class UsersController {
     return this.authService.signup(bodyData.email, bodyData.password);
   }
 
+  // POST /auth/signin — existing user login karne ka endpoint. Signup jaisa hi
+  // `CreateUserDto` (email + password) reuse kiya — dono requests ka shape same hai,
+  // isliye alag "SigninDto" banane ki zaroorat nahi padi.
+  @Post('/signin')
+  @Serialize(UserDto)
+  signIn(@Body() bodyData: CreateUserDto) {
+    // authService.signin() email+password verify karta hai (dekho src/users/auth.service.ts)
+    // aur match hone par poora `User` return karta hai — `@Serialize(UserDto)` yaha bhi
+    // laga hai, isliye response me `password` (hashed hi sahi) kabhi client tak nahi jaayega
+    return this.authService.signin(bodyData.email, bodyData.password);
+  }
+
   // @Serialize(UserDto) — custom decorator (dekho src/interceptors/serialize.interceptor.ts)
   // jo internally `@UseInterceptors(new SerializeInterceptor(UserDto))` lagata hai.
   // Response jaane se pehle poore `User` entity (jisme `password` bhi hota hai) ko

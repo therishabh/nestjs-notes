@@ -72,4 +72,38 @@ export class AuthService {
 
     return newUser;
   }
+
+  async signin(email: string, password: string) {
+    // usersService.find() Step 10 wale "contains" search (Like()) ki wajah se hamesha
+    // ek ARRAY return karta hai — login ke liye humein sirf EXACT match wala single
+    // user chahiye, isliye array destructuring (`const [user] = ...`) se pehla element
+    // nikal liya. Agar email exist hi nahi karta to array khaali hoga, `user` khud
+    // `undefined` ban jaayega.
+    const [user] = await this.usersService.find(email);
+    if (!user) {
+      throw new BadRequestException('Email id not found');
+    }
+
+    // Signup ke time password `salt + '.' + hash` format me store hua tha (dekho
+    // signup() upar), isliye login verify karne ke liye pehle usi format ko wapas
+    // `.split('.')` se salt aur stored hash me alag kiya — bina usi salt ke naya hash
+    // dobara compute karna hi possible nahi hai (scrypt deterministic hai: same
+    // password + same salt = hamesha same hash).
+    const [salt, storedHash] = user.password.split('.');
+
+    // Incoming plain password ko usi salt ke saath dobara scrypt se hash kiya —
+    // agar user ne sahi password diya hai, to ye naya hash aur DB me stored hash
+    // EXACT match karenge.
+    const hash = (await scrypt(password, salt, 32)) as Buffer;
+
+    if (storedHash !== hash.toString('hex')) {
+      // Known gap: "Email id not found" vs "Password not correct" — alag-alag
+      // error messages dena real-world me ek "user enumeration" security anti-pattern
+      // hai (attacker ko pata chal jaata hai ki email DB me exist karta hai ya nahi).
+      // Production app me dono cases me ek generic "Invalid credentials" bhejna safer hota.
+      throw new BadRequestException('Password not correct');
+    }
+
+    return user;
+  }
 }
