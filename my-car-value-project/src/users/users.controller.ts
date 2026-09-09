@@ -23,13 +23,21 @@ import { UserDto } from 'src/users/user.dto';
 // (src/users/auth.service.ts, hand-rolled scrypt) ab kisi route se use nahi hota, sirf
 // reference/comparison ke liye codebase me rakha gaya hai.
 import { AuthV2Service } from './auth-v2.service';
+// CurrentUser — apna custom param decorator (dekho src/users/decorators/current-user.decorator.ts),
+// abhi ke liye ek hardcoded string return karta hai — sirf ye prove karne ke liye ki wiring
+// (createParamDecorator → @CurrentUser() → controller param) sahi se kaam kar rahi hai.
+// Agla step isse real session-based user return karwana hoga.
+import { CurrentUser } from './decorators/current-user.decorator';
 
 // `@Session()` (@nestjs/common) request ka `req.session` object inject karta hai —
 // runtime pe ye `cookie-session` middleware (dekho main.ts) se populate hota hai.
 // Decorator khud value ko `any` type deta hai, isliye yaha apna explicit shape
 // declare kiya taaki `session.userId` type-safe rahe.
+// `| null` isliye add kiya gaya kyunki signout `session.userId = null` set karke logout
+// karta hai — `undefined` (session me kabhi set hi nahi hua) aur `null` (explicitly logout
+// hua) dono "not signed in" states hain, `if (!session.userId)` check dono ko cover karta hai.
 interface AuthSession {
-  userId?: number;
+  userId?: number | null;
 }
 
 // @Controller('auth') is class ke saare routes ke aage `/auth` prefix laga deta hai
@@ -101,6 +109,25 @@ export class UsersController {
       throw new NotFoundException('user not found');
     }
 
+    return user;
+  }
+
+  // POST /auth/signout — logout karne ka endpoint. Session se koi data DELETE nahi
+  // kiya (cookie-session me poora session hi ek cookie hai, individual key delete
+  // karne ka koi seedha API nahi) — bas `userId` ko `null` set kar diya, jisse
+  // `/auth/me`, `/auth/:id` jaisi jagah wala `if (!session.userId)` check ab
+  // "signed out" treat karega. Koi response body nahi bheja (204-jaisa behavior).
+  @Post('/signout')
+  signout(@Session() session: AuthSession) {
+    session.userId = null;
+  }
+
+  // GET /auth/whoami — `@CurrentUser()` custom decorator ka demo/test route hai.
+  // `CurrentUser` abhi hardcoded `'hi there !'` return karta hai (dekho decorator
+  // file ka comment), isliye yaha `user: string` type diya — jab decorator ko real
+  // session-based user return karwaya jayega, ye type bhi `User` me update karna hoga.
+  @Get('/whoami')
+  whoAmI(@CurrentUser() user: string) {
     return user;
   }
 

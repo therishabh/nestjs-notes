@@ -25,6 +25,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 15: Signin Endpoint (Login) Banaya](#step-15-signin-endpoint-login-banaya)
   - [Step 16: `AuthV2Service` — bcrypt-Based Auth, Routes Switch Kiye](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye)
   - [Step 17: Cookie Sessions — `/auth/me` Se Logged-In User Pata Karna](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna)
+  - [Step 18: Signout, aur `@CurrentUser()` Custom Decorator Scaffold](#step-18-signout-aur-currentuser-custom-decorator-scaffold)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -57,6 +58,8 @@ my-car-value-project/
     │   ├── bcrypt-auth.service.ts       # Learning demo — `bcrypt` library se hash/compare (koi controller isse abhi use nahi karta)
     │   ├── user.entity.ts               # `User` DB table define karta hai (id, email, password columns) + AfterInsert/AfterUpdate/AfterRemove lifecycle hooks
     │   ├── user.dto.ts                  # `CreateUserDto` (signup) + `UpdateUserDto` (partial update) + `UserDto` (safe response shape, password exclude) — sab request/response shapes
+    │   ├── decorators/
+    │   │   └── current-user.decorator.ts  # `@CurrentUser()` custom param decorator — abhi scaffold/stub (hardcoded string return karta hai), dekho Step 18
     │   ├── request.http                 # Manual testing ke liye sample requests (VS Code REST Client extension se run hote hain)
     │   └── users.module.ts              # UsersController + UsersService + AuthService ko group karta hai, TypeOrmModule.forFeature([User]) se User repository inject karne layak banata hai
     └── reports/
@@ -834,6 +837,49 @@ Kuch important cheezein:
 - **`findUser` (`GET /auth/:id`) bhi ab session set karta hai** — jab koi bhi user ka profile fetch hota hai, session me uska `userId` bhi save ho jaata hai (chhota inconsistency/gap: normally sirf apna khud ka login state set karna chahiye, kisi doosre user ko dekhne se apna session badalna nahi chahiye — is project ka current behavior hai, real app me isse alag rakha jaata).
 - **`db.sqlite` restart pe reset nahi hoti** — related confusion clarify karne layak: `synchronize: true` sirf schema (tables/columns) ko entities se sync karta hai, koi `dropSchema` nahi laga, isliye server restart karne pe existing users/data **persist** rehta hai, delete nahi hota (jab tak khud manually file delete na ki jaaye).
 
+### Step 18: Signout, aur `@CurrentUser()` Custom Decorator Scaffold
+
+Step 17 me signin/signup session set karna seekha tha — is step me do cheezein add hui: session **clear** karne ka tareeka (`signout`), aur apna khud ka **custom parameter decorator** banane ka pehla scaffold step (`@CurrentUser()`).
+
+**1. `POST /auth/signout`** — session se login state hata deta hai:
+
+```ts
+@Post('/signout')
+signout(@Session() session: AuthSession) {
+  session.userId = null;
+}
+```
+
+- `cookie-session` me poora session hi ek signed cookie hai — kisi individual key ko "delete" karne ka seedha API nahi hai, isliye `userId` ko `null` set kiya. `AuthSession` interface bhi isi liye update hui:
+  ```ts
+  interface AuthSession {
+    userId?: number | null;
+  }
+  ```
+  Ab `session.userId` do "not logged in" states represent kar sakta hai — `undefined` (session me kabhi set hi nahi hua) aur `null` (explicitly signout hua) — dono hi jagah existing check `if (!session.userId)` (jaise `/auth/me` me) sahi se kaam karta hai, kyunki `null` aur `undefined` dono JS me falsy hain.
+
+**2. `@CurrentUser()` — custom `ParameterDecorator` ka scaffold:**
+
+```ts
+// users/decorators/current-user.decorator.ts
+import { createParamDecorator } from '@nestjs/common';
+
+export const CurrentUser = createParamDecorator(() => {
+  return 'hi there !';
+});
+```
+
+```ts
+// users/users.controller.ts
+@Get('/whoami')
+whoAmI(@CurrentUser() user: string) {
+  return user;
+}
+```
+
+- **`createParamDecorator()`** NestJS ka function hai jo apna khud ka parameter decorator banane deta hai — bilkul waise hi jaise `@Body()`, `@Session()`, `@Param()` (sab built-in decorators bhi isi tarah bane hote hain). Iska factory `(data, context)` leta hai: `data` wo argument hai jo decorator ko call karte waqt diya jaaye (e.g. `@CurrentUser('email')` me `'email'`), aur `context` poora `ExecutionContext` hai (jisse `context.switchToHttp().getRequest()` se raw request nikaali ja sakti hai).
+- **Abhi ye sirf ek "scaffold"/proof-of-concept step hai** — factory hardcoded `'hi there !'` return karta hai, `data`/`context` dono abhi use nahi ho rahe (isliye signature me likhe hi nahi gaye — na TS na ESLint "unused parameter" complain karta). Maqsad sirf itna confirm karna tha ki decorator sahi se wire ho raha hai (`GET /auth/whoami` hit karne pe controller ko woh hardcoded string mil rahi hai). **Real version** (agla natural step) `context` se request nikaal kar `request.session.userId` se actual logged-in `User` return karega — tab `whoAmI` ka `user: string` type bhi `User` me update karna hoga.
+
 ---
 
 ## Concepts Glossary
@@ -902,6 +948,9 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`@Session()` decorator** | [Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna) | `@nestjs/common` ka parameter decorator jo controller method me `req.session` inject karta hai — value `any` type ki hoti hai, isliye apna explicit interface likhna best practice hai | |
 | **Static vs Dynamic Route Order (`/me` vs `/:id`)** | [Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna) | Routes declaration-order me match hote hain — ek static path (`/me`) apne dynamic sibling (`/:id`) se PEHLE declare karna zaroori hai, warna dynamic route usse "eat" kar leta hai (`id = "me"` bankar) | |
 | **`synchronize: true` vs `dropSchema`** | [Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna) | `synchronize: true` sirf DB schema (tables/columns) ko entities se sync karta hai — existing rows delete nahi karta. Server restart karne pe data persist rehta hai; sirf `dropSchema: true` (jo yaha kabhi use nahi hua) ya manual file-delete se data uda hai | |
+| **`createParamDecorator()`** | [Step 18](#step-18-signout-aur-currentuser-custom-decorator-scaffold) | NestJS ka function jo apna khud ka custom parameter decorator banane deta hai — `@Body()`, `@Session()`, `@Param()` jaise built-in decorators bhi isi se bane hote hain. Factory `(data, context)` leta hai — `data` decorator-call-time argument, `context` poora `ExecutionContext` | |
+| **Scaffold/Stub Step (pehle wiring, baad me logic)** | [Step 18](#step-18-signout-aur-currentuser-custom-decorator-scaffold) | Naya mechanism (jaise custom decorator) pehle ek hardcoded/dummy value ke saath banana aur test karna ki wiring sahi hai, phir real logic add karna — debugging aasan ho jaati hai kyunki "connection kaam kar rahi hai ya nahi" aur "logic sahi hai ya nahi" alag-alag test hote hain | |
+| **`null` vs `undefined` (falsy checks)** | [Step 18](#step-18-signout-aur-currentuser-custom-decorator-scaffold) | JS me dono hi falsy hain, isliye `if (!session.userId)` jaisa check dono states ("kabhi set hi nahi hua" aur "explicitly clear kiya gaya") ko ek saath "not signed in" treat kar leta hai — alag-alag handle karne ki zaroorat nahi padi | |
 
 ---
 
