@@ -1,9 +1,19 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import cookieSession from 'cookie-session';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // cookie-session middleware — request/response cycle me `req.session` available
+  // karwata hai, jise controllers `@Session()` decorator (@nestjs/common se) ke
+  // through read/write karte hain. Isse pehle lagana zaroori hai, warna `req.session`
+  // hamesha `undefined` rahega aur `session.userId = ...` jaisa code runtime pe crash karega.
+  app.use(
+    cookieSession({
+      keys: [process.env.COOKIE_SESSION_KEY ?? 'dev-only-secret-key'],
+    }),
+  );
   // useGlobalPipes — is pipe ko poori app ke har route pe apply karta hai
   // (alag se har controller/route pe @UsePipes() lagane ki zaroorat nahi)
   app.useGlobalPipes(

@@ -8,6 +8,7 @@ import {
   Query,
   Put,
   NotFoundException,
+  Session,
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
@@ -21,6 +22,14 @@ import { UserDto } from 'src/users/user.dto';
 // (src/users/auth.service.ts, hand-rolled scrypt) ab kisi route se use nahi hota, sirf
 // reference/comparison ke liye codebase me rakha gaya hai.
 import { AuthV2Service } from './auth-v2.service';
+
+// `@Session()` (@nestjs/common) request ka `req.session` object inject karta hai —
+// runtime pe ye `cookie-session` middleware (dekho main.ts) se populate hota hai.
+// Decorator khud value ko `any` type deta hai, isliye yaha apna explicit shape
+// declare kiya taaki `session.userId` type-safe rahe.
+interface AuthSession {
+  userId?: number;
+}
 
 // @Controller('auth') is class ke saare routes ke aage `/auth` prefix laga deta hai
 // (isliye neeche wala route asal me `/auth/signup` pe hit hota hai)
@@ -56,11 +65,19 @@ export class UsersController {
   // isliye alag "SigninDto" banane ki zaroorat nahi padi.
   @Post('/signin')
   @Serialize(UserDto)
-  signIn(@Body() bodyData: CreateUserDto) {
+  async signIn(
+    @Body() bodyData: CreateUserDto,
+    @Session() session: AuthSession,
+  ) {
     // authV2Service.signin() email+password verify karta hai (dekho src/users/auth-v2.service.ts)
     // aur match hone par poora `User` return karta hai — `@Serialize(UserDto)` yaha bhi
     // laga hai, isliye response me `password` (hashed hi sahi) kabhi client tak nahi jaayega
-    return this.authV2Service.signin(bodyData.email, bodyData.password);
+    const user = await this.authV2Service.signin(
+      bodyData.email,
+      bodyData.password,
+    );
+    session.userId = user.id;
+    return user;
   }
 
   // @Serialize(UserDto) — custom decorator (dekho src/interceptors/serialize.interceptor.ts)
@@ -71,11 +88,12 @@ export class UsersController {
   // `create`/`update`/`remove` abhi bhi raw entity return karte hain (known gap, README me documented)
   @Serialize(UserDto)
   @Get('/:id')
-  async findUser(@Param('id') id: string) {
+  async findUser(@Param('id') id: string, @Session() session: AuthSession) {
     const user = await this.usersService.findOne(parseInt(id));
     if (!user) {
       throw new NotFoundException('user not found');
     }
+    session.userId = user.id;
     return user;
   }
 
