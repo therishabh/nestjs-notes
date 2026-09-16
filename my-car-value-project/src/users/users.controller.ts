@@ -11,6 +11,7 @@ import {
   Session,
   UnauthorizedException,
   Request,
+  UseGuards,
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
@@ -31,6 +32,12 @@ import { AuthV2Service } from './auth-v2.service';
 // me istemal karte hi seedha logged-in `User` mil jaata hai, bina manually session/DB call kiye.
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from './user.entity';
+// AuthGuard — route ko "login required" banata hai (dekho src/users/guards/AuthGuard.ts).
+// CurrentUserInterceptor (Step 19/20) ke ulat, guard koi data attach/transform nahi karta —
+// sirf `true`/`false` decide karta hai ki request controller handler tak pahunchne di jaaye
+// ya nahi. `false` milte hi Nest khud `403 Forbidden` bhej deta hai, controller ka code
+// chalta hi nahi.
+import { AuthGuard } from './guards/AuthGuard';
 // `CurrentUserInterceptor` ab is controller me kahi import/apply nahi karna padta —
 // pehle yaha `@UseInterceptors(CurrentUserInterceptor)` class-level pe lagaya gaya tha
 // (jo sirf is controller/`/auth/*` routes tak limited tha), ab usse `users.module.ts`
@@ -166,6 +173,14 @@ export class UsersController {
   // poori application ke saare routes (is route sahit) pe already apply ho chuka hota
   // hai. Yaha dobara `@UseInterceptors(CurrentUserInterceptor)` lagate to interceptor
   // is route pe 2 baar chalta (ek extra/wasted `findOne()` DB call).
+  //
+  // `@UseGuards(AuthGuard)` — is route ko "login required" bana diya (demo ke liye,
+  // isi ek route pe lagaya hai). Guards Interceptors se PEHLE chalte hain (Middleware →
+  // Guard → Interceptor → Pipe → Handler), isliye agar user logged-in nahi hai
+  // (`session.userId` falsy), `AuthGuard` `false` return karke request ko turant
+  // `403 Forbidden` de deta hai — na `CurrentUserInterceptor` ka `findOne()` DB call
+  // hota hai, na `whoAmIV2()` ka body chalta hai.
+  @UseGuards(AuthGuard)
   @Get('/whoami_v2')
   whoAmIV2(@Request() request: RequestWithCurrentUser) {
     return request.currentUser;

@@ -28,6 +28,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 18: Signout, aur `@CurrentUser()` Custom Decorator Scaffold](#step-18-signout-aur-currentuser-custom-decorator-scaffold)
   - [Step 19: `CurrentUserInterceptor` — Session Se Poora User Request Pe Attach Kiya](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya)
   - [Step 20: `CurrentUserInterceptor` Ko `APP_INTERCEPTOR` Se Global Banaya](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya)
+  - [Step 21: `AuthGuard` — Route Ko Login-Required Banaya](#step-21-authguard--route-ko-login-required-banaya)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -1047,6 +1048,49 @@ Kuch important cheezein:
 
 **Rule of thumb**: `APP_INTERCEPTOR`/`APP_GUARD`/etc jis module ke `providers` me likho, uski dependencies **usi module ke DI context me resolve honi chahiye** (ya to wahi module unhe khud provide kare, jaisa yaha `UsersModule` kar raha hai — ya `imports` se kisi doosre module se `exports` ho kar aa rahi ho). `AppModule` me likhna sirf tab zaroori/sensible hota jab interceptor ki dependencies bhi khud `AppModule` ke providers me hoti (ya explicitly export/import ki gayi hoti) — is case me `UsersModule` hi natural/simplest jagah thi.
 
+### Step 21: `AuthGuard` — Route Ko Login-Required Banaya
+
+Ab tak `/auth/whoami_v2` koi bhi hit kar sakta tha, chahe login ho ya na ho — agar login nahi hota, `request.currentUser` bas `undefined`/`null` mil jaata (silent, koi error nahi). Is step me ek **Guard** banaya jo explicitly route ko "login required" banata hai — non-logged-in request ko controller tak pahunchne se hi rok deta hai.
+
+**`users/guards/AuthGuard.ts`** — naya guard:
+
+```ts
+import { CanActivate, ExecutionContext } from '@nestjs/common';
+
+export class AuthGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest<{
+      session: {
+        userId?: null | number;
+      };
+    }>();
+    return !!request.session?.userId;
+  }
+}
+```
+
+**`users.controller.ts`** — ek specific route pe (demo ke liye) apply kiya:
+
+```ts
+@UseGuards(AuthGuard)
+@Get('/whoami_v2')
+whoAmIV2(@Request() request: RequestWithCurrentUser) {
+  return request.currentUser;
+}
+```
+
+Kuch important cheezein:
+
+- **`CanActivate` interface** — Guard ka contract. Iska `canActivate()` method `boolean` (ya `Promise<boolean>`/`Observable<boolean>`, jab check async ho, jaise DB ya external API se verify karna ho) return karta hai. `true` → request aage jaane di jaati hai; `false` → Nest **khud automatically** `403 Forbidden` response bhej deta hai — `NotFoundException`/`BadRequestException` ki tarah humein khud kuch throw nahi karna padta.
+- **Interceptor se farak**: Interceptor (`SerializeInterceptor`, `CurrentUserInterceptor`) request/response ko **modify/enrich** karta hai. Guard sirf ek **allow/deny gatekeeper** hai — na wo request badalta hai, na response.
+- **TypeScript error jo fix hui**: `session.userId` ka type `number | null` hai — seedha `return request.session.userId` likhne pe ye error aata:
+  ```
+  TS2416: Property 'canActivate' in type 'AuthGuard' is not assignable to the same property in base type 'CanActivate'.
+  ```
+  Wajah — `CanActivate.canActivate()` strictly `boolean | Promise<boolean> | Observable<boolean>` maangta hai, `number | null` uske andar fit nahi hota. Fix: `!!request.session?.userId` se explicit `boolean` banaya (truthy `userId` → `true`, `null`/`undefined`/`0` → `false`).
+- **Guard, Interceptor se PEHLE chalta hai** — poora lifecycle order hai: **Middleware → Guard → Interceptor (pre) → Pipe → Handler → Interceptor (post) → Exception Filter**. Isi wajah se `/whoami_v2` ko bina login hit karne pe `AuthGuard` sabse pehle `false` return kar deta hai aur request turant reject ho jaati hai — na globally-lagाa `CurrentUserInterceptor` ([Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya)) ka `findOne()` DB call hota hai, na controller ka code chalta hai. Guard ko is route pe rakhne ka fayda sirf "security" nahi, ek chhota **performance** fayda bhi hai — unauthenticated requests ko sasti (session check, DB call nahi) jagah pe hi reject kar diya jaata hai.
+- **Abhi sirf `/whoami_v2` pe method-level laga hai** — baaki routes (jaise `/auth/:id`, `/auth`) abhi bhi bina guard ke hain, jaan-bujh kar sirf demo ke liye ek route pe apply kiya gaya (`APP_GUARD` se globally bhi lagaya ja sakta hai — [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) jaisa hi pattern, `CurrentUserInterceptor` ke liye jo `APP_INTERCEPTOR` use hua tha).
+
 ---
 
 ## Concepts Glossary
@@ -1127,6 +1171,10 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **Module-scoped Likhna, App-wide Apply Hona (gotcha)** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | `APP_INTERCEPTOR`/`APP_GUARD` jaisa provider kisi bhi ek module (yaha `UsersModule`) ke `providers` array me likha jaata hai, lekin uska effect us module tak limited nahi rehta — poori application pe lagu ho jaata hai, jo pehli baar dekhne pe counter-intuitive lagta hai | |
 | **Global Interceptor/Guard ka Performance Trade-off** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | Ek baar global ho jaane ke baad interceptor/guard **har** request pe chalta hai, chahe us route ko uski zaroorat ho ya na ho (yaha: har request pe session check + agar `userId` hai to ek extra DB `findOne()` call) — convenience vs per-request extra cost ka conscious trade-off hai | |
 | **`APP_INTERCEPTOR` ka DI Scope Rule (kis module me likhein)** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | `APP_INTERCEPTOR` kis module me likha hai ye application-wide effect ko change nahi karta, lekin uski dependencies **usi module ke DI context me resolve honi zaroori hain** (khud provide ki ho, ya `exports`/`imports` se aayi ho) — isi wajah se `CurrentUserInterceptor` `AppModule` ke bajaye `UsersModule` me likha gaya, kyunki `UsersService` (jo iski dependency hai) sirf `UsersModule` provide/export karta hai | |
+| **Guard (`CanActivate`)** | [Step 21](#step-21-authguard--route-ko-login-required-banaya) | Request lifecycle ka ek checkpoint jo sirf **allow/deny** decide karta hai (koi data modify/enrich nahi karta) — `canActivate()` `true`/`false` (ya `Promise`/`Observable` inka) return karta hai; `false` pe Nest khud automatically `403 Forbidden` bhej deta hai | |
+| **Guard vs Interceptor** | [Step 21](#step-21-authguard--route-ko-login-required-banaya) | Guard sirf gatekeeping karta hai (request ko aage jaane du ya na du), Interceptor request/response ko modify/enrich karta hai — dono alag concerns hain aur lifecycle me Guard **pehle** chalta hai (Middleware → Guard → Interceptor → Pipe → Handler) | |
+| **`@UseGuards()`** | [Step 21](#step-21-authguard--route-ko-login-required-banaya) | Ek ya zyada Guards ko method-level, class-level, ya globally (`APP_GUARD` se, `APP_INTERCEPTOR` jaisa hi pattern) kisi route/controller/application pe attach karta hai | |
+| **Guard-Level Early Rejection (performance)** | [Step 21](#step-21-authguard--route-ko-login-required-banaya) | Kyunki Guard Interceptor se pehle chalta hai, `false` return karte hi request turant reject ho jaati hai — us route ke liye lage koi bhi (global bhi) Interceptor ka kaam (jaise `CurrentUserInterceptor` ka DB `findOne()` call) bhi skip ho jaata hai, na ki sirf controller handler | |
 
 ---
 
@@ -1257,7 +1305,7 @@ Concept level pe dono sahi hain (dono slow hashing + salt use karte hain), lekin
 
 Interview me aksar in per bhi pucha jaata hai — abhi is project me implement nahi kiye, lekin concept jaanna zaroori hai:
 
-- **Guards** — route access control (e.g. `AuthGuard` — logged-in user hi access kar sake).
+- ~~**Guards** — route access control (e.g. `AuthGuard` — logged-in user hi access kar sake).~~ **Implement ho gaya — dekho [Step 21](#step-21-authguard--route-ko-login-required-banaya).**
 - **Exception Filters** — errors ko custom format me catch/handle karna (`@Catch()`).
 - **Middleware** — Express-level, route handler se bhi pehle chalta hai (e.g. logging, cookie parsing).
 - **Custom Decorators** (`@CurrentUser()` jaisa) — repetitive logic ko ek decorator me wrap karna.
