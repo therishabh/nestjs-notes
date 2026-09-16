@@ -10,12 +10,25 @@ import { AuthService } from './auth.service';
 // (dekho bcrypt-auth.service.ts ka top-level comment). Isse abhi koi controller use nahi karta.
 import { BcryptAuthService } from './bcrypt-auth.service';
 import { AuthV2Service } from './auth-v2.service';
+// CurrentUserInterceptor — request pe `currentUser` attach karta hai (dekho
+// current-user.interceptor.ts). Iske constructor me `UsersService` inject hota hai,
+// isliye Nest DI container ko ye resolve karne ke liye providers array me hona zaroori
+// hai. Yaha register karna interceptor ko kisi route pe apply NAHI karta — wo
+// alag se `@UseInterceptors(CurrentUserInterceptor)` se users.controller.ts (class-level)
+// pe explicitly laga hai.
+import { CurrentUserInterceptor } from './interceptors/current-user.interceptor';
 
 @Module({
   imports: [TypeOrmModule.forFeature([User])],
   controllers: [UsersController],
-  // AuthService/BcryptAuthService bhi providers me register kiye — warna kahi bhi inject
-  // karte hi "can't resolve dependencies" error aata
-  providers: [UsersService, AuthService, BcryptAuthService, AuthV2Service],
+  // AuthService/BcryptAuthService/CurrentUserInterceptor bhi providers me register kiye —
+  // warna kahi bhi inject karte hi "can't resolve dependencies" error aata
+  providers: [
+    UsersService,
+    AuthService,
+    BcryptAuthService,
+    AuthV2Service,
+    CurrentUserInterceptor,
+  ],
 })
 export class UsersModule {}

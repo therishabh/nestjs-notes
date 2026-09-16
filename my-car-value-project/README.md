@@ -26,6 +26,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 16: `AuthV2Service` — bcrypt-Based Auth, Routes Switch Kiye](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye)
   - [Step 17: Cookie Sessions — `/auth/me` Se Logged-In User Pata Karna](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna)
   - [Step 18: Signout, aur `@CurrentUser()` Custom Decorator Scaffold](#step-18-signout-aur-currentuser-custom-decorator-scaffold)
+  - [Step 19: `CurrentUserInterceptor` — Session Se Poora User Request Pe Attach Kiya](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -880,6 +881,120 @@ whoAmI(@CurrentUser() user: string) {
 - **`createParamDecorator()`** NestJS ka function hai jo apna khud ka parameter decorator banane deta hai — bilkul waise hi jaise `@Body()`, `@Session()`, `@Param()` (sab built-in decorators bhi isi tarah bane hote hain). Iska factory `(data, context)` leta hai: `data` wo argument hai jo decorator ko call karte waqt diya jaaye (e.g. `@CurrentUser('email')` me `'email'`), aur `context` poora `ExecutionContext` hai (jisse `context.switchToHttp().getRequest()` se raw request nikaali ja sakti hai).
 - **Abhi ye sirf ek "scaffold"/proof-of-concept step hai** — factory hardcoded `'hi there !'` return karta hai, `data`/`context` dono abhi use nahi ho rahe (isliye signature me likhe hi nahi gaye — na TS na ESLint "unused parameter" complain karta). Maqsad sirf itna confirm karna tha ki decorator sahi se wire ho raha hai (`GET /auth/whoami` hit karne pe controller ko woh hardcoded string mil rahi hai). **Real version** (agla natural step) `context` se request nikaal kar `request.session.userId` se actual logged-in `User` return karega — tab `whoAmI` ka `user: string` type bhi `User` me update karna hoga.
 
+### Step 19: `CurrentUserInterceptor` — Session Se Poora User Request Pe Attach Kiya
+
+Step 18 me `@CurrentUser()` sirf ek **scaffold** tha (hardcoded `'hi there !'` return karta tha). Is step me usse **real** banaya gaya — session ke `userId` se poora `User` DB se fetch karke request pe attach karne ke liye ek naya **`CurrentUserInterceptor`** banaya, aur uski wiring ke around kai practical gotchas mile.
+
+**1. `CurrentUserInterceptor` — naya interceptor jo request ko "enrich" karta hai:**
+
+```ts
+// users/interceptors/current-user.interceptor.ts
+interface RequestWithSessionAndCurrentUser {
+  session: { userId?: number | null };
+  currentUser: User | null;
+}
+
+@Injectable()
+export class CurrentUserInterceptor implements NestInterceptor {
+  constructor(private readonly userService: UsersService) {}
+
+  async intercept(context: ExecutionContext, next: CallHandler) {
+    const request = context
+      .switchToHttp()
+      .getRequest<RequestWithSessionAndCurrentUser>();
+    const { userId } = request.session || {};
+
+    if (userId) {
+      const user = await this.userService.findOne(userId);
+      request.currentUser = user;
+    }
+    return next.handle();
+  }
+}
+```
+
+- [Step 11](#step-11-response-serialization-with-interceptor) ka `SerializeInterceptor` **response ko POST-handler** modify karta hai (`next.handle().pipe(map(...))`). Ye naya interceptor iske ulta kaam karta hai — **PRE-handler**: `next.handle()` call karne se PEHLE hi `request` object pe `currentUser` field set kar deta hai, taaki controller handler chalne tak (aur uske parameter decorators resolve hone tak) wo value already available ho.
+- **Gotcha mila**: `UsersService.findOne()` ek Promise return karta hai ([Step 7](#step-7-find-update-remove-methods-add-kiye)), pehle draft me `await` bhool gaye the — isse `request.currentUser` me actual `User` ki jagah ek **unresolved Promise object** set ho raha tha. TypeScript isse khud nahi pakad paya (koi type error nahi aaya, `no-floating-promises` bhi is jagah trigger nahi hua kyunki assignment ho rahi thi, call ignore nahi), sirf runtime pe `currentUser` galat cheez hoti. Fix: `intercept()` ko `async` banaya aur `findOne()` ko `await` kiya.
+
+**2. Registering ≠ Applying — ek DI/interceptor wiring gotcha:**
+
+`CurrentUserInterceptor` ko `users.module.ts` ke `providers` array me daala (taaki uske constructor ka `UsersService` dependency Nest DI resolve kar sake):
+
+```ts
+// users.module.ts
+providers: [
+  UsersService,
+  AuthService,
+  BcryptAuthService,
+  AuthV2Service,
+  CurrentUserInterceptor,
+],
+```
+
+Lekin sirf `providers` me daalne se ye interceptor kisi route pe apply **nahi** ho jaata — Nest ko usse istemal karne ke liye explicitly kahi `@UseInterceptors()` lagana zaroori hai. Isse controller class ke level pe laga diya, taaki poore `/auth/*` routes pe automatically apply ho jaaye:
+
+```ts
+// users.controller.ts
+@UseInterceptors(CurrentUserInterceptor)
+@Controller('auth')
+export class UsersController { ... }
+```
+
+**Ek aur gotcha isi ke around mila**: shuru me isse `whoami_v2` route pe **method-level** bhi laga diya gaya tha — matlab wahi interceptor class-level aur method-level, dono jagah laga hua tha, jisse us route pe har request ke liye interceptor 2 baar chalta (ek extra, wasted `findOne()` DB call). Fix: class-level hi kaafi hai (poore controller pe apply ho hi raha hai), method-level wala hataya.
+
+**3. `@CurrentUser()` decorator ko real banaya (Step 18 ka scaffold complete):**
+
+```ts
+// users/decorators/current-user.decorator.ts
+export interface RequestWithSession {
+  session: { userId?: number | null };
+  currentUser: User | null;
+}
+
+export const CurrentUser = createParamDecorator(
+  (data: never, context: ExecutionContext) => {
+    const request = context.switchToHttp().getRequest<RequestWithSession>();
+    return request.currentUser;
+  },
+);
+```
+
+Decorator khud **koi DB call nahi karta** — bas `CurrentUserInterceptor` ne pehle se set kiya `request.currentUser` read karke return kar deta hai. Ye isliye possible hai kyunki interceptor ka pre-handler code (`next.handle()` se pehle wala hissa) request lifecycle me Pipes/Controller-handler (jaha param decorators resolve hote hain) se **pehle** chalta hai. `users.controller.ts` me `whoAmI` ka type bhi ab sahi ho gaya:
+
+```ts
+@Get('/whoami')
+whoAmI(@CurrentUser() user: User) {
+  return user;
+}
+```
+
+**4. `GET /auth/whoami_v2` — same cheez, seedha `@Request()` se (comparison ke liye):**
+
+```ts
+@Get('/whoami_v2')
+whoAmIV2(@Request() request: RequestWithCurrentUser) {
+  return request.currentUser;
+}
+```
+
+Ye route decorator use nahi karta, seedha `@Request()` (poora request object) inject karke usi `currentUser` field ko padhta hai — decorator approach zyada clean/reusable hai (sirf jo field chahiye wahi milta hai, koi extra typing route me nahi likhni padti), lekin `@Request()` approach dikhata hai ki decorator ke peeche asal me kya ho raha hai.
+
+**Ek naya TypeScript gotcha yaha mila** — `@Request() request: Request` likhne pe ye error aaya:
+
+```
+TS2339: Property 'currentUser' does not exist on type 'Request'.
+```
+
+Wajah: `Request` naam is file me `@nestjs/common` se already ek **VALUE** (parameter decorator, `@Request()`) ke roop me import ho chuka tha. Jab wahi naam **type position** me use kiya (`request: Request`), TypeScript usse value-import se resolve nahi kar paata — is project ke `tsconfig.json` ka default `lib` DOM bhi include karta hai, isliye TS fallback me global **fetch-API wala `Request`** (browser ka, Express ka nahi) type utha leta hai. Fix ek local extended interface banake kiya:
+
+```ts
+interface RequestWithCurrentUser extends Request {
+  currentUser?: User | null;
+}
+```
+
+Ye compile ho jaata hai kyunki hum sirf apna add kiya `currentUser` field access kar rahe hain — koi Express-specific property (`.headers`, `.params`, etc.) nahi. Agar unki zaroorat padti, to `express` package se `Request` ko alias karke import karna padta (`import { Request as ExpressRequest } from 'express'`), kyunki fetch-API ka `Request` aur Express ka `Request` do bilkul alag shapes hain — filhaal ye ek "chalta hai lekin loose hai" trade-off hai.
+
 ---
 
 ## Concepts Glossary
@@ -951,6 +1066,10 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`createParamDecorator()`** | [Step 18](#step-18-signout-aur-currentuser-custom-decorator-scaffold) | NestJS ka function jo apna khud ka custom parameter decorator banane deta hai — `@Body()`, `@Session()`, `@Param()` jaise built-in decorators bhi isi se bane hote hain. Factory `(data, context)` leta hai — `data` decorator-call-time argument, `context` poora `ExecutionContext` | |
 | **Scaffold/Stub Step (pehle wiring, baad me logic)** | [Step 18](#step-18-signout-aur-currentuser-custom-decorator-scaffold) | Naya mechanism (jaise custom decorator) pehle ek hardcoded/dummy value ke saath banana aur test karna ki wiring sahi hai, phir real logic add karna — debugging aasan ho jaati hai kyunki "connection kaam kar rahi hai ya nahi" aur "logic sahi hai ya nahi" alag-alag test hote hain | |
 | **`null` vs `undefined` (falsy checks)** | [Step 18](#step-18-signout-aur-currentuser-custom-decorator-scaffold) | JS me dono hi falsy hain, isliye `if (!session.userId)` jaisa check dono states ("kabhi set hi nahi hua" aur "explicitly clear kiya gaya") ko ek saath "not signed in" treat kar leta hai — alag-alag handle karne ki zaroorat nahi padi | |
+| **Pre-handler vs Post-handler Interceptor** | [Step 19](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) | Interceptor `next.handle()` se PEHLE (request modify/enrich karna, jaise `CurrentUserInterceptor`) aur/ya BAAD me (response modify karna, jaise `SerializeInterceptor`, [Step 11](#step-11-response-serialization-with-interceptor)) dono jagah kaam kar sakta hai — ek hi class dono kar sakti hai | |
+| **Provider Registration ≠ Interceptor Application** | [Step 19](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) | Kisi interceptor ko `providers` array me daalna sirf Nest DI container ko uski dependencies resolve karne layak banata hai — usse kisi route pe actually apply karne ke liye alag se `@UseInterceptors()` (method/class/global level) lagana zaroori hai | |
+| **Duplicate Interceptor Application** | [Step 19](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) | Ek hi interceptor ko class-level aur method-level dono jagah laga dena usse ek hi request pe 2 baar chala deta hai — extra/wasted kaam (yaha ek extra DB `findOne()` call) | |
+| **Value-only Import Used as a Type (name collision)** | [Step 19](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) | Agar koi naam (jaise `Request`) sirf VALUE ke roop me import kiya gaya ho aur usse type-position me use kiya jaaye, to TypeScript us naam ko value-import se resolve nahi karta — global scope me same-named type (jaise DOM ka fetch-API `Request`) mil jaaye to silently wahi use ho jaata hai, jo asal runtime shape (yaha Express ka request) se match nahi karta | |
 
 ---
 

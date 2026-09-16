@@ -4,9 +4,24 @@ POST http://localhost:3030/auth/signup
 Content-Type: application/json
 
 {
-    "email": "sonam@gmail.com",
-    "password": "fgfgfg"
+    "email": "guru@gmail.com",
+    "password": "123456"
 }
+
+### Signin user
+POST http://localhost:3030/auth/signin
+Content-Type: application/json
+
+{
+    "email": "guru@gmail.com",
+    "password": "123456"
+}
+
+### Signout user
+POST http://localhost:3030/auth/signout
+
+### Who am I
+GET http://localhost:3030/auth/whoami
 
 
 ### Find a particular user with ID

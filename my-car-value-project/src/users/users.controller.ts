@@ -10,6 +10,8 @@ import {
   NotFoundException,
   Session,
   UnauthorizedException,
+  Request,
+  UseInterceptors,
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
@@ -23,11 +25,29 @@ import { UserDto } from 'src/users/user.dto';
 // (src/users/auth.service.ts, hand-rolled scrypt) ab kisi route se use nahi hota, sirf
 // reference/comparison ke liye codebase me rakha gaya hai.
 import { AuthV2Service } from './auth-v2.service';
-// CurrentUser — apna custom param decorator (dekho src/users/decorators/current-user.decorator.ts),
-// abhi ke liye ek hardcoded string return karta hai — sirf ye prove karne ke liye ki wiring
-// (createParamDecorator → @CurrentUser() → controller param) sahi se kaam kar rahi hai.
-// Agla step isse real session-based user return karwana hoga.
+// CurrentUser — apna custom param decorator (dekho src/users/decorators/current-user.decorator.ts).
+// Ab ye `request.currentUser` return karta hai, jo `CurrentUserInterceptor` (neeche import,
+// class-level `@UseInterceptors()` se poore controller pe laga hai) session ke `userId` se
+// DB lookup karke pehle hi set kar chuka hota hai — isliye `@CurrentUser()` controller me
+// istemal karte hi seedha logged-in `User` mil jaata hai, bina manually session/DB call kiye.
 import { CurrentUser } from './decorators/current-user.decorator';
+import { User } from './user.entity';
+// CurrentUserInterceptor — poori controller class pe `@UseInterceptors()` se laga hai
+// (neeche `@Controller('auth')` se pehle), isliye har route pe (bina alag se method-level
+// laga ye) `request.currentUser` populate ho jaata hai.
+import { CurrentUserInterceptor } from './interceptors/current-user.interceptor';
+// CurrentUserInterceptor request pe `currentUser` field set karta hai (dekho
+// src/users/interceptors/current-user.interceptor.ts), lekin wo field type-level pe
+// kahi declared nahi hai. NOTE: `Request` yaha `@nestjs/common` se sirf VALUE (parameter
+// decorator) ke roop me import hua hai, isliye type-position me TS isko global DOM
+// fetch-API `Request` (browser ka `Request`, Express ka nahi) samajhta hai — asal runtime
+// object Express ka request hota hai, isliye TS yaha thoda "loose" hai. Filhaal chalta hai
+// kyunki hum sirf apna add kiya `currentUser` field access kar rahe hain, koi aur Express-
+// specific property (jaise `.headers`, `.params`) nahi — agar wo chahiye ho to `express`
+// se `Request` type import karna zaroori hoga.
+interface RequestWithCurrentUser extends Request {
+  currentUser?: User | null;
+}
 
 // `@Session()` (@nestjs/common) request ka `req.session` object inject karta hai —
 // runtime pe ye `cookie-session` middleware (dekho main.ts) se populate hota hai.
@@ -42,6 +62,7 @@ interface AuthSession {
 
 // @Controller('auth') is class ke saare routes ke aage `/auth` prefix laga deta hai
 // (isliye neeche wala route asal me `/auth/signup` pe hit hota hai)
+@UseInterceptors(CurrentUserInterceptor)
 @Controller('auth')
 export class UsersController {
   // Dono services inject kiye — UsersService abhi bhi findUser/findAllUsers/update/remove
@@ -55,6 +76,10 @@ export class UsersController {
 
   // POST /auth/signup — naya user create karne ka endpoint
   @Post('/signup')
+  // @Serialize(UserDto) — response jaane se pehle SerializeInterceptor ise UserDto
+  // (sirf id + email, @Expose() wale fields) me convert kar deta hai, isliye neeche
+  // wala `return user` (jisme hashed password bhi hota hai) client tak raw nahi jaata.
+  // Poora explanation/detail neeche `findUser()` ke upar wale comment me (line ~134-139).
   @Serialize(UserDto)
   async create(
     @Body() bodyData: CreateUserDto,
@@ -122,13 +147,25 @@ export class UsersController {
     session.userId = null;
   }
 
-  // GET /auth/whoami — `@CurrentUser()` custom decorator ka demo/test route hai.
-  // `CurrentUser` abhi hardcoded `'hi there !'` return karta hai (dekho decorator
-  // file ka comment), isliye yaha `user: string` type diya — jab decorator ko real
-  // session-based user return karwaya jayega, ye type bhi `User` me update karna hoga.
+  // GET /auth/whoami — `@CurrentUser()` custom param decorator use karke logged-in
+  // user get karta hai. `CurrentUser` (dekho src/users/decorators/current-user.decorator.ts)
+  // ab real `request.currentUser` return karta hai — jo value class-level pe lagi
+  // `@UseInterceptors(CurrentUserInterceptor)` ne is route chalne se PEHLE hi set kar
+  // di hoti hai (session ke `userId` se DB lookup karke). Isliye type bhi `User` diya.
   @Get('/whoami')
-  whoAmI(@CurrentUser() user: string) {
+  whoAmI(@CurrentUser() user: User) {
     return user;
+  }
+
+  // agar hme lag rha hai ki decorator nahi banana hai hme and direct interceptor se hi
+  // current user get kr le uske liye below code hai.
+  // `CurrentUserInterceptor` yaha alag se `@UseInterceptors()` nahi lagana pada — class ke
+  // upar (dekho `@Controller('auth')` se pehle wala `@UseInterceptors(CurrentUserInterceptor)`)
+  // already laga hai, jo is controller ke SAARE routes pe apply hota hai. Yaha dobara lagate
+  // to interceptor is route pe 2 baar chalta (ek extra/wasted `findOne()` DB call).
+  @Get('/whoami_v2')
+  whoAmIV2(@Request() request: RequestWithCurrentUser) {
+    return request.currentUser;
   }
 
   // @Serialize(UserDto) — custom decorator (dekho src/interceptors/serialize.interceptor.ts)
