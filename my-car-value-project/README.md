@@ -27,6 +27,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 17: Cookie Sessions — `/auth/me` Se Logged-In User Pata Karna](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna)
   - [Step 18: Signout, aur `@CurrentUser()` Custom Decorator Scaffold](#step-18-signout-aur-currentuser-custom-decorator-scaffold)
   - [Step 19: `CurrentUserInterceptor` — Session Se Poora User Request Pe Attach Kiya](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya)
+  - [Step 20: `CurrentUserInterceptor` Ko `APP_INTERCEPTOR` Se Global Banaya](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -995,6 +996,42 @@ interface RequestWithCurrentUser extends Request {
 
 Ye compile ho jaata hai kyunki hum sirf apna add kiya `currentUser` field access kar rahe hain — koi Express-specific property (`.headers`, `.params`, etc.) nahi. Agar unki zaroorat padti, to `express` package se `Request` ko alias karke import karna padta (`import { Request as ExpressRequest } from 'express'`), kyunki fetch-API ka `Request` aur Express ka `Request` do bilkul alag shapes hain — filhaal ye ek "chalta hai lekin loose hai" trade-off hai.
 
+### Step 20: `CurrentUserInterceptor` Ko `APP_INTERCEPTOR` Se Global Banaya
+
+Step 19 me `CurrentUserInterceptor` ko `users.controller.ts` (`UsersController`) pe **class-level** `@UseInterceptors(CurrentUserInterceptor)` se laga diya gaya tha — matlab uska effect sirf `/auth/*` routes tak limited tha. Problem ye hai ki agar kal koi doosra controller/module (jaise `ReportsController`) bhi `@CurrentUser()`/`request.currentUser` use karna chahe, to usme bhi alag se yehi decorator lagana padta — aur bhoolne ka risk rehta. Is step me interceptor ko poori application ke liye **ek hi jagah se GLOBAL** bana diya gaya.
+
+**`users.module.ts`** — interceptor ab class ke roop me nahi, ek special provider-object ke roop me register hota hai:
+
+```ts
+// users/users.module.ts
+import { APP_INTERCEPTOR } from '@nestjs/core';
+
+@Module({
+  imports: [TypeOrmModule.forFeature([User])],
+  controllers: [UsersController],
+  providers: [
+    UsersService,
+    AuthService,
+    BcryptAuthService,
+    AuthV2Service,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CurrentUserInterceptor,
+    },
+  ],
+})
+export class UsersModule {}
+```
+
+Aur `users.controller.ts` se `@UseInterceptors(CurrentUserInterceptor)` class-level decorator (aur uska import) poori tarah hata diya — ab uski zaroorat hi nahi.
+
+Kuch important cheezein:
+
+- **`APP_INTERCEPTOR` ek SPECIAL/reserved DI token hai** (`@nestjs/core` se, `APP_GUARD`/`APP_PIPE`/`APP_FILTER` isi family ke members hain). Jab `providers` array me `{ provide: APP_INTERCEPTOR, useClass: SomeInterceptor }` jaisa object diya jaata hai, Nest usse normal provider ki tarah treat nahi karta — isse **globally**, poore application ke har module/controller/route pe automatically apply kar deta hai.
+- **Gotcha jo yaha samajhna important hai**: ye provider likha to `UsersModule` ke andar gaya hai, lekin uska scope `UsersModule` ya `/auth` tak limited **nahi** rehta — `APP_INTERCEPTOR` ka behavior hi yahi hai ki jis bhi module me likho, poori app pe lagu ho jaata hai. Ye ek common confusion point hai naye developers ke liye (lagta hai jaise module-scoped hoga, hota nahi).
+- **`main.ts` ke `app.useGlobalInterceptors()` se better kyun**: dono hi interceptor ko globally apply karte hain, lekin `app.useGlobalInterceptors(new CurrentUserInterceptor(...))` DI container se **bahar** hota hai — agar interceptor ko koi dependency chahiye (yaha `CurrentUserInterceptor` ko `UsersService` chahiye), to usse manually construct karna padta. `APP_INTERCEPTOR` provider DI-aware hai, isliye Nest khud `CurrentUserInterceptor` ka constructor dekh kar `UsersService` inject kar deta hai — bilkul waisे hi jaise koi normal `@Injectable()` provider banta hai.
+- **Ek real trade-off bhi hai**: ab `CurrentUserInterceptor` **har single request** pe chalta hai — chahe wo route `currentUser` use kare ya na kare (jaise `POST /auth/signup` khud session set kar raha hai, usse abhi `currentUser` ki zaroorat nahi, phir bhi interceptor chalega). Agar session me `userId` set hai, to matlab har request pe ek extra `findOne()` DB call hoti hai. Chhoti app ke liye negligible hai, lekin bade scale pe ye ek conscious performance trade-off hai jo global interceptors/guards use karte waqt hamesha dhyan me rakhna chahiye.
+
 ---
 
 ## Concepts Glossary
@@ -1070,6 +1107,10 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **Provider Registration ≠ Interceptor Application** | [Step 19](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) | Kisi interceptor ko `providers` array me daalna sirf Nest DI container ko uski dependencies resolve karne layak banata hai — usse kisi route pe actually apply karne ke liye alag se `@UseInterceptors()` (method/class/global level) lagana zaroori hai | |
 | **Duplicate Interceptor Application** | [Step 19](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) | Ek hi interceptor ko class-level aur method-level dono jagah laga dena usse ek hi request pe 2 baar chala deta hai — extra/wasted kaam (yaha ek extra DB `findOne()` call) | |
 | **Value-only Import Used as a Type (name collision)** | [Step 19](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) | Agar koi naam (jaise `Request`) sirf VALUE ke roop me import kiya gaya ho aur usse type-position me use kiya jaaye, to TypeScript us naam ko value-import se resolve nahi karta — global scope me same-named type (jaise DOM ka fetch-API `Request`) mil jaaye to silently wahi use ho jaata hai, jo asal runtime shape (yaha Express ka request) se match nahi karta | |
+| **`APP_INTERCEPTOR` (aur `APP_GUARD`/`APP_PIPE`/`APP_FILTER`)** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | `@nestjs/core` ka special/reserved DI token — `providers` array me `{ provide: APP_INTERCEPTOR, useClass: X }` likhte hi Nest us provider ko poori application ke har route pe GLOBALLY apply kar deta hai, chahe wo kisi bhi module ke andar likha ho | |
+| **DI-Registered Global vs `app.useGlobalInterceptors()`** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | Dono poore app pe interceptor apply karte hain, lekin `APP_INTERCEPTOR` provider DI container ke through banta hai isliye interceptor apne constructor me normal dependencies (jaise `UsersService`) inject karwa sakta hai — `main.ts` me `new` karke bana `app.useGlobalInterceptors()` wala interceptor DI se bahar hota hai, uski dependencies manually banani padti | |
+| **Module-scoped Likhna, App-wide Apply Hona (gotcha)** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | `APP_INTERCEPTOR`/`APP_GUARD` jaisa provider kisi bhi ek module (yaha `UsersModule`) ke `providers` array me likha jaata hai, lekin uska effect us module tak limited nahi rehta — poori application pe lagu ho jaata hai, jo pehli baar dekhne pe counter-intuitive lagta hai | |
+| **Global Interceptor/Guard ka Performance Trade-off** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | Ek baar global ho jaane ke baad interceptor/guard **har** request pe chalta hai, chahe us route ko uski zaroorat ho ya na ho (yaha: har request pe session check + agar `userId` hai to ek extra DB `findOne()` call) — convenience vs per-request extra cost ka conscious trade-off hai | |
 
 ---
 

@@ -12,23 +12,43 @@ import { BcryptAuthService } from './bcrypt-auth.service';
 import { AuthV2Service } from './auth-v2.service';
 // CurrentUserInterceptor — request pe `currentUser` attach karta hai (dekho
 // current-user.interceptor.ts). Iske constructor me `UsersService` inject hota hai,
-// isliye Nest DI container ko ye resolve karne ke liye providers array me hona zaroori
-// hai. Yaha register karna interceptor ko kisi route pe apply NAHI karta — wo
-// alag se `@UseInterceptors(CurrentUserInterceptor)` se users.controller.ts (class-level)
-// pe explicitly laga hai.
+// isliye Nest DI container ko ye resolve karne ke liye kahi providers me register
+// hona zaroori hai (neeche `APP_INTERCEPTOR` provider ke through).
 import { CurrentUserInterceptor } from './interceptors/current-user.interceptor';
+// `APP_INTERCEPTOR` — Nest ka ek SPECIAL/reserved DI token (`@nestjs/core` se), jo
+// niche `providers` array me `{ provide: APP_INTERCEPTOR, useClass: ... }` ke roop
+// me use hote hi Nest ko ye interceptor **poori application ke har module/controller/
+// route** pe globally apply karne ka signal deta hai — chahe ye khud sirf `UsersModule`
+// ke providers me likha ho, iska scope `UsersModule`/`/auth` tak limited NAHI rehta.
+// Ye `main.ts` ke `app.useGlobalInterceptors(new CurrentUserInterceptor(...))` jaisa hi
+// result deta hai, bas ek bada fayde ke saath: kyunki ye DI container ke through
+// register hota hai, `CurrentUserInterceptor` apne constructor me `UsersService` jaisi
+// dependencies normally inject करवा sakta hai — `main.ts` me `new` karke banaya hota
+// to DI se bahar hota, aur manually `UsersService` ka instance khud jod-tod kar banana
+// padta. (`APP_GUARD`, `APP_PIPE`, `APP_FILTER` bhi isi pattern se globally register
+// hote hain.)
+import { APP_INTERCEPTOR } from '@nestjs/core';
 
 @Module({
   imports: [TypeOrmModule.forFeature([User])],
   controllers: [UsersController],
-  // AuthService/BcryptAuthService/CurrentUserInterceptor bhi providers me register kiye —
-  // warna kahi bhi inject karte hi "can't resolve dependencies" error aata
+  // AuthService/BcryptAuthService bhi providers me register kiye — warna kahi bhi
+  // inject karte hi "can't resolve dependencies" error aata. `CurrentUserInterceptor`
+  // yaha seedha class ke roop me NAHI, balki `APP_INTERCEPTOR` provider object ke
+  // roop me register kiya hai — isse ye is module tak limited na rehkar poori app pe
+  // global ho jaata hai (upar `APP_INTERCEPTOR` import ke comment me detail hai).
+  // Ab controller me alag se `@UseInterceptors(CurrentUserInterceptor)` lagane ki
+  // zaroorat NAHI rahi (pehle wahi kiya jaata tha, jo sirf `/auth/*` routes tak
+  // limited hota — dekho README Step 19 vs Step 20 ka farak).
   providers: [
     UsersService,
     AuthService,
     BcryptAuthService,
     AuthV2Service,
-    CurrentUserInterceptor,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CurrentUserInterceptor,
+    },
   ],
 })
 export class UsersModule {}

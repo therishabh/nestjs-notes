@@ -11,7 +11,6 @@ import {
   Session,
   UnauthorizedException,
   Request,
-  UseInterceptors,
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
@@ -26,16 +25,19 @@ import { UserDto } from 'src/users/user.dto';
 // reference/comparison ke liye codebase me rakha gaya hai.
 import { AuthV2Service } from './auth-v2.service';
 // CurrentUser — apna custom param decorator (dekho src/users/decorators/current-user.decorator.ts).
-// Ab ye `request.currentUser` return karta hai, jo `CurrentUserInterceptor` (neeche import,
-// class-level `@UseInterceptors()` se poore controller pe laga hai) session ke `userId` se
-// DB lookup karke pehle hi set kar chuka hota hai — isliye `@CurrentUser()` controller me
-// istemal karte hi seedha logged-in `User` mil jaata hai, bina manually session/DB call kiye.
+// Ab ye `request.currentUser` return karta hai, jo `CurrentUserInterceptor` (ab GLOBAL
+// interceptor — dekho users.module.ts ka `APP_INTERCEPTOR` provider) session ke `userId`
+// se DB lookup karke pehle hi set kar chuka hota hai — isliye `@CurrentUser()` controller
+// me istemal karte hi seedha logged-in `User` mil jaata hai, bina manually session/DB call kiye.
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from './user.entity';
-// CurrentUserInterceptor — poori controller class pe `@UseInterceptors()` se laga hai
-// (neeche `@Controller('auth')` se pehle), isliye har route pe (bina alag se method-level
-// laga ye) `request.currentUser` populate ho jaata hai.
-import { CurrentUserInterceptor } from './interceptors/current-user.interceptor';
+// `CurrentUserInterceptor` ab is controller me kahi import/apply nahi karna padta —
+// pehle yaha `@UseInterceptors(CurrentUserInterceptor)` class-level pe lagaya gaya tha
+// (jo sirf is controller/`/auth/*` routes tak limited tha), ab usse `users.module.ts`
+// me `APP_INTERCEPTOR` provider se GLOBALLY register kar diya gaya hai — poori
+// application ke har controller/route pe apply hota hai, is file ko iske baare me
+// kuch bhi jaanne ki zaroorat nahi.
+//
 // CurrentUserInterceptor request pe `currentUser` field set karta hai (dekho
 // src/users/interceptors/current-user.interceptor.ts), lekin wo field type-level pe
 // kahi declared nahi hai. NOTE: `Request` yaha `@nestjs/common` se sirf VALUE (parameter
@@ -62,7 +64,6 @@ interface AuthSession {
 
 // @Controller('auth') is class ke saare routes ke aage `/auth` prefix laga deta hai
 // (isliye neeche wala route asal me `/auth/signup` pe hit hota hai)
-@UseInterceptors(CurrentUserInterceptor)
 @Controller('auth')
 export class UsersController {
   // Dono services inject kiye — UsersService abhi bhi findUser/findAllUsers/update/remove
@@ -149,9 +150,10 @@ export class UsersController {
 
   // GET /auth/whoami — `@CurrentUser()` custom param decorator use karke logged-in
   // user get karta hai. `CurrentUser` (dekho src/users/decorators/current-user.decorator.ts)
-  // ab real `request.currentUser` return karta hai — jo value class-level pe lagi
-  // `@UseInterceptors(CurrentUserInterceptor)` ne is route chalne se PEHLE hi set kar
-  // di hoti hai (session ke `userId` se DB lookup karke). Isliye type bhi `User` diya.
+  // ab real `request.currentUser` return karta hai — jo value ab GLOBALLY registered
+  // `CurrentUserInterceptor` (dekho users.module.ts ka `APP_INTERCEPTOR` provider) ne
+  // is route chalne se PEHLE hi set kar di hoti hai (session ke `userId` se DB lookup
+  // karke). Isliye type bhi `User` diya.
   @Get('/whoami')
   whoAmI(@CurrentUser() user: User) {
     return user;
@@ -159,10 +161,11 @@ export class UsersController {
 
   // agar hme lag rha hai ki decorator nahi banana hai hme and direct interceptor se hi
   // current user get kr le uske liye below code hai.
-  // `CurrentUserInterceptor` yaha alag se `@UseInterceptors()` nahi lagana pada — class ke
-  // upar (dekho `@Controller('auth')` se pehle wala `@UseInterceptors(CurrentUserInterceptor)`)
-  // already laga hai, jo is controller ke SAARE routes pe apply hota hai. Yaha dobara lagate
-  // to interceptor is route pe 2 baar chalta (ek extra/wasted `findOne()` DB call).
+  // `CurrentUserInterceptor` yaha alag se `@UseInterceptors()` nahi lagana pada — wo ab
+  // `users.module.ts` me `APP_INTERCEPTOR` provider se GLOBALLY register hai, isliye
+  // poori application ke saare routes (is route sahit) pe already apply ho chuka hota
+  // hai. Yaha dobara `@UseInterceptors(CurrentUserInterceptor)` lagate to interceptor
+  // is route pe 2 baar chalta (ek extra/wasted `findOne()` DB call).
   @Get('/whoami_v2')
   whoAmIV2(@Request() request: RequestWithCurrentUser) {
     return request.currentUser;
