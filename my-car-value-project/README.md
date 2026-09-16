@@ -1032,6 +1032,21 @@ Kuch important cheezein:
 - **`main.ts` ke `app.useGlobalInterceptors()` se better kyun**: dono hi interceptor ko globally apply karte hain, lekin `app.useGlobalInterceptors(new CurrentUserInterceptor(...))` DI container se **bahar** hota hai — agar interceptor ko koi dependency chahiye (yaha `CurrentUserInterceptor` ko `UsersService` chahiye), to usse manually construct karna padta. `APP_INTERCEPTOR` provider DI-aware hai, isliye Nest khud `CurrentUserInterceptor` ka constructor dekh kar `UsersService` inject kar deta hai — bilkul waisे hi jaise koi normal `@Injectable()` provider banta hai.
 - **Ek real trade-off bhi hai**: ab `CurrentUserInterceptor` **har single request** pe chalta hai — chahe wo route `currentUser` use kare ya na kare (jaise `POST /auth/signup` khud session set kar raha hai, usse abhi `currentUser` ki zaroorat nahi, phir bhi interceptor chalega). Agar session me `userId` set hai, to matlab har request pe ek extra `findOne()` DB call hoti hai. Chhoti app ke liye negligible hai, lekin bade scale pe ye ek conscious performance trade-off hai jo global interceptors/guards use karte waqt hamesha dhyan me rakhna chahiye.
 
+**`UsersModule` me kyun likha, `AppModule` me kyun nahi?** (ek natural confusion, jo iss step ko implement karte waqt discuss hui)
+
+`APP_INTERCEPTOR` provider **kisi bhi** module me likho, chalta wo poori application pe hi hai — is baat me `AppModule` (root module) ki koi special/extra permission nahi hai (dekho upar ka gotcha bullet). Yaha `UsersModule` me likhna sirf "chalta hai" wala choice nahi tha — is project ke current structure me ye **zaroori bhi tha**:
+
+- `CurrentUserInterceptor` ke constructor me `UsersService` inject hota hai.
+- `UsersService` sirf `UsersModule` ke `providers` array me hai, aur `UsersModule` usse `exports` **nahi** karta (`users.module.ts` me koi `exports:` array hi nahi hai — matlab `UsersService` `UsersModule` ke bahar "invisible/private" hai).
+- Agar `{ provide: APP_INTERCEPTOR, useClass: CurrentUserInterceptor }` ko `app.module.ts` ke `providers` me daalte, to `AppModule` ka DI container `UsersService` ko resolve hi nahi kar paata (chahe `AppModule` `UsersModule` ko `imports` kare bhi) — bootstrap time pe ye error aata:
+  ```
+  Nest can't resolve dependencies of the CurrentUserInterceptor (?). Please make sure that
+  the argument UsersService at index [0] is available in the AppModule context.
+  ```
+- Fix karne ke liye `UsersModule` me `exports: [UsersService]` add karna padta, taaki `AppModule` (jo already `UsersModule` ko `imports` karta hai) uska access le sake — ek extra, avoidable wiring step.
+
+**Rule of thumb**: `APP_INTERCEPTOR`/`APP_GUARD`/etc jis module ke `providers` me likho, uski dependencies **usi module ke DI context me resolve honi chahiye** (ya to wahi module unhe khud provide kare, jaisa yaha `UsersModule` kar raha hai — ya `imports` se kisi doosre module se `exports` ho kar aa rahi ho). `AppModule` me likhna sirf tab zaroori/sensible hota jab interceptor ki dependencies bhi khud `AppModule` ke providers me hoti (ya explicitly export/import ki gayi hoti) — is case me `UsersModule` hi natural/simplest jagah thi.
+
 ---
 
 ## Concepts Glossary
@@ -1111,6 +1126,7 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **DI-Registered Global vs `app.useGlobalInterceptors()`** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | Dono poore app pe interceptor apply karte hain, lekin `APP_INTERCEPTOR` provider DI container ke through banta hai isliye interceptor apne constructor me normal dependencies (jaise `UsersService`) inject karwa sakta hai — `main.ts` me `new` karke bana `app.useGlobalInterceptors()` wala interceptor DI se bahar hota hai, uski dependencies manually banani padti | |
 | **Module-scoped Likhna, App-wide Apply Hona (gotcha)** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | `APP_INTERCEPTOR`/`APP_GUARD` jaisa provider kisi bhi ek module (yaha `UsersModule`) ke `providers` array me likha jaata hai, lekin uska effect us module tak limited nahi rehta — poori application pe lagu ho jaata hai, jo pehli baar dekhne pe counter-intuitive lagta hai | |
 | **Global Interceptor/Guard ka Performance Trade-off** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | Ek baar global ho jaane ke baad interceptor/guard **har** request pe chalta hai, chahe us route ko uski zaroorat ho ya na ho (yaha: har request pe session check + agar `userId` hai to ek extra DB `findOne()` call) — convenience vs per-request extra cost ka conscious trade-off hai | |
+| **`APP_INTERCEPTOR` ka DI Scope Rule (kis module me likhein)** | [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) | `APP_INTERCEPTOR` kis module me likha hai ye application-wide effect ko change nahi karta, lekin uski dependencies **usi module ke DI context me resolve honi zaroori hain** (khud provide ki ho, ya `exports`/`imports` se aayi ho) — isi wajah se `CurrentUserInterceptor` `AppModule` ke bajaye `UsersModule` me likha gaya, kyunki `UsersService` (jo iski dependency hai) sirf `UsersModule` provide/export karta hai | |
 
 ---
 
