@@ -29,6 +29,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 19: `CurrentUserInterceptor` — Session Se Poora User Request Pe Attach Kiya](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya)
   - [Step 20: `CurrentUserInterceptor` Ko `APP_INTERCEPTOR` Se Global Banaya](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya)
   - [Step 21: `AuthGuard` — Route Ko Login-Required Banaya](#step-21-authguard--route-ko-login-required-banaya)
+  - [Step 22: Fail-Closed Auth — `APP_GUARD` Aur `@Public()` Decorator](#step-22-fail-closed-auth--app_guard-aur-public-decorator)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -698,7 +699,7 @@ Kuch important cheezein:
 Step 13-15 ka hand-rolled `crypto.scrypt` approach (`AuthService`, `auth.service.ts`) kaam to kar raha tha, lekin usme kuch cheezein ek production codebase ke standard se neeche thi:
 
 1. **`usersService.find(email)` "contains" search se auth karna** — ye method Step 10 me `Like('%value%')` se ban gaya tha (admin-style partial search ke liye), signup/signin jaisi auth-critical jagah pe isse reuse karna galat tha — technically `find('john')` na sirf `john@x.com` balki `johnny@x.com` ko bhi match kar sakta tha.
-2. **Manual `!==` se hash compare karna** — ye **timing attack** ke against safe nahi hai (string comparison character-by-character rukti hai jaise hi mismatch milta hai, isse response-time se thoda-thoda info leak ho sakta hai). Isके liye `crypto.timingSafeEqual()` ya ek library jo khud constant-time compare kare, use karna chahiye tha.
+2. **Manual `!==` se hash compare karna** — ye **timing attack** ke against safe nahi hai (string comparison character-by-character rukti hai jaise hi mismatch milta hai, isse response-time se thoda-thoda info leak ho sakta hai). Iske liye `crypto.timingSafeEqual()` ya ek library jo khud constant-time compare kare, use karna chahiye tha.
 3. **Salt/hash ka manual bookkeeping** (`randomBytes(8)`, `salt + '.' + hash`) — kaam karta hai, lekin har extra manual step ek naya bug-surface hai.
 4. **"Email not found" vs "Password not correct" alag messages** — user enumeration gap (upar Step 15 me discuss ho chuka).
 
@@ -1030,7 +1031,7 @@ Kuch important cheezein:
 
 - **`APP_INTERCEPTOR` ek SPECIAL/reserved DI token hai** (`@nestjs/core` se, `APP_GUARD`/`APP_PIPE`/`APP_FILTER` isi family ke members hain). Jab `providers` array me `{ provide: APP_INTERCEPTOR, useClass: SomeInterceptor }` jaisa object diya jaata hai, Nest usse normal provider ki tarah treat nahi karta — isse **globally**, poore application ke har module/controller/route pe automatically apply kar deta hai.
 - **Gotcha jo yaha samajhna important hai**: ye provider likha to `UsersModule` ke andar gaya hai, lekin uska scope `UsersModule` ya `/auth` tak limited **nahi** rehta — `APP_INTERCEPTOR` ka behavior hi yahi hai ki jis bhi module me likho, poori app pe lagu ho jaata hai. Ye ek common confusion point hai naye developers ke liye (lagta hai jaise module-scoped hoga, hota nahi).
-- **`main.ts` ke `app.useGlobalInterceptors()` se better kyun**: dono hi interceptor ko globally apply karte hain, lekin `app.useGlobalInterceptors(new CurrentUserInterceptor(...))` DI container se **bahar** hota hai — agar interceptor ko koi dependency chahiye (yaha `CurrentUserInterceptor` ko `UsersService` chahiye), to usse manually construct karna padta. `APP_INTERCEPTOR` provider DI-aware hai, isliye Nest khud `CurrentUserInterceptor` ka constructor dekh kar `UsersService` inject kar deta hai — bilkul waisे hi jaise koi normal `@Injectable()` provider banta hai.
+- **`main.ts` ke `app.useGlobalInterceptors()` se better kyun**: dono hi interceptor ko globally apply karte hain, lekin `app.useGlobalInterceptors(new CurrentUserInterceptor(...))` DI container se **bahar** hota hai — agar interceptor ko koi dependency chahiye (yaha `CurrentUserInterceptor` ko `UsersService` chahiye), to usse manually construct karna padta. `APP_INTERCEPTOR` provider DI-aware hai, isliye Nest khud `CurrentUserInterceptor` ka constructor dekh kar `UsersService` inject kar deta hai — bilkul waise hi jaise koi normal `@Injectable()` provider banta hai.
 - **Ek real trade-off bhi hai**: ab `CurrentUserInterceptor` **har single request** pe chalta hai — chahe wo route `currentUser` use kare ya na kare (jaise `POST /auth/signup` khud session set kar raha hai, usse abhi `currentUser` ki zaroorat nahi, phir bhi interceptor chalega). Agar session me `userId` set hai, to matlab har request pe ek extra `findOne()` DB call hoti hai. Chhoti app ke liye negligible hai, lekin bade scale pe ye ek conscious performance trade-off hai jo global interceptors/guards use karte waqt hamesha dhyan me rakhna chahiye.
 
 **`UsersModule` me kyun likha, `AppModule` me kyun nahi?** (ek natural confusion, jo iss step ko implement karte waqt discuss hui)
@@ -1097,10 +1098,89 @@ Ye `AuthGuard` learning-scale hai — kaam sahi karta hai, lekin agar ye code re
 
 1. **`403` yaha galat status code hai.** HTTP semantics me `401 Unauthorized` ka matlab hai *"pata nahi tum kaun ho, pehle login karo"*, aur `403 Forbidden` ka matlab hai *"pata hai tum kaun ho, lekin is resource ka access nahi hai"*. Abhi `canActivate()` sirf `false` return karta hai, jisse Nest hamesha generic `403` deta hai — chahe user bilkul login hi na ho (jo asal me `401` case hai). Sahi fix: `session.userId` na ho to `false` return karne ke bajaye seedha `throw new UnauthorizedException()` karo — [Step 16](#step-16-authv2service--bcrypt-based-auth-routes-switch-kiye) me bhi yehi `401` vs `400` distinction discuss hui thi, yaha `401` vs `403` ka wahi principle hai.
 2. **Authentication (AuthN) aur Authorization (AuthZ) do alag concerns hain.** `AuthGuard` sirf itna check karta hai "koi login hai ya nahi" (AuthN) — ye nahi batata ki "is specific user ko *isi* resource pe access hai ya nahi" (AuthZ, jaise "sirf admin hi doosre user ko delete kar sake"). Real apps me dono ke liye alag Guards banaye jaate hain (jaise `AuthGuard` + ek `RolesGuard`), aur `@UseGuards(AuthGuard, RolesGuard)` se chain kiya jaata hai — Nest inhe array order me sequentially chalata hai, koi bhi ek `false` return kare to request turant reject ho jaati hai.
-3. **Har route pe manually `@UseGuards()` lagana scale nahi karta — ye "fail-open" hai.** Abhi sirf `/whoami_v2` protected hai; kal ek naya sensitive route banega aur `@UseGuards()` lagana koi bhool jaayega, to wo silently **unprotected** reh jaayega (default = open access). Production-grade apps isse ulta karte hain (**"fail-closed"**): `AuthGuard` ko `APP_GUARD` se globally register kiya jaata hai (sab kuch by-default protected), aur jo routes genuinely public honi chahiye (jaise `/auth/signup`, `/auth/signin`) unhe ek custom `@Public()` decorator banaake, Nest ke `Reflector` (metadata read karne wala utility) se guard ke andar explicitly "skip karo" mark kiya jaata hai. Ye is project ka natural agla evolution step hoga.
+3. ~~**Har route pe manually `@UseGuards()` lagana scale nahi karta — ye "fail-open" hai.** Abhi sirf `/whoami_v2` protected hai; kal ek naya sensitive route banega aur `@UseGuards()` lagana koi bhool jaayega, to wo silently **unprotected** reh jaayega (default = open access). Production-grade apps isse ulta karte hain (**"fail-closed"**): `AuthGuard` ko `APP_GUARD` se globally register kiya jaata hai (sab kuch by-default protected), aur jo routes genuinely public honi chahiye (jaise `/auth/signup`, `/auth/signin`) unhe ek custom `@Public()` decorator banaake, Nest ke `Reflector` (metadata read karne wala utility) se guard ke andar explicitly "skip karo" mark kiya jaata hai.~~ **Implement ho gaya — dekho [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator).**
 4. **Naming collision ek real gotcha hai.** `@nestjs/passport` (real-world session/JWT auth ke liye industry-standard package) khud bhi `AuthGuard` naam ka ek export deta hai (`AuthGuard('jwt')` jaisa factory). Is project ka apna `AuthGuard` class bhi isi naam ka hai — abhi conflict nahi hai (Passport install hi nahi hai), lekin agar kal Passport add karo, to naming clash/confusion ho sakta hai (dono ko import karte waqt alias chahiye hoga). Zyada specific naam (jaise `SessionAuthGuard`) shuru se hi ye ambiguity avoid kar deta.
 5. **`ExecutionContext` HTTP-specific nahi hai.** `context.switchToHttp()` sirf HTTP requests ke liye sahi data deta hai. Agar kal app me WebSockets/GraphQL/microservices add ho, to yehi guard un contexts me galat behave karega ya crash ho sakta hai — production guards aksar `context.getType()` se pehle check karte hain ki request kis transport se aa rahi hai.
 6. **Guard easily unit-testable hai** — `canActivate(context)` ek plain function hai jo `ExecutionContext` leta hai, isliye test me `context.switchToHttp().getRequest` ko mock karna trivial hai (poora HTTP server chalane ki zaroorat nahi). Ye Guards ke design ka ek underrated fayda hai — business-critical access-control logic ko controller se alag, isolated test kiya ja sakta hai.
+
+### Step 22: Fail-Closed Auth — `APP_GUARD` Aur `@Public()` Decorator
+
+Step 21 ke senior-notes wala point #3 (upar) implement kiya — `AuthGuard` ko **globally**, poori application ke default behavior ke roop me lagaya (**fail-closed**: sab kuch protected, jab tak explicitly public na mark kiya jaaye), aur jo routes genuinely login se pehle accessible hone chahiye unhe ek naya `@Public()` decorator se explicitly exempt kiya.
+
+**1. `users/decorators/public.decorator.ts`** — naya metadata-based decorator:
+
+```ts
+// users/decorators/public.decorator.ts
+import { SetMetadata } from '@nestjs/common';
+
+export const IS_PUBLIC_KEY = 'isPublic';
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+```
+
+`SetMetadata(key, value)` kisi bhi route handler (method) ya poori controller class pe custom metadata "chipka" deta hai — `@Body()`/`@Session()` jaise decorators request se data **nikaalte** hain, `SetMetadata()`-based decorators class/method pe khud data **attach** karte hain, jise baad me `Reflector` se wapas padha ja sakta hai. `IS_PUBLIC_KEY` sirf ek shared string key hai jo write (`Public()`) aur read (`AuthGuard`) side dono ko sync rakhti hai.
+
+**2. `AuthGuard.ts`** — ab `Reflector` se metadata check karta hai:
+
+```ts
+// users/guards/AuthGuard.ts
+import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+
+@Injectable()
+export class AuthGuard implements CanActivate {
+  constructor(private readonly reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) {
+      return true;
+    }
+
+    const request = context.switchToHttp().getRequest<{
+      session: { userId?: null | number };
+    }>();
+    return !!request.session?.userId;
+  }
+}
+```
+
+**3. `app.module.ts`** — `AuthGuard` ko `APP_GUARD` se globally register kiya:
+
+```ts
+// app.module.ts
+import { APP_GUARD } from '@nestjs/core';
+import { AuthGuard } from './users/guards/AuthGuard';
+
+@Module({
+  ...
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: AuthGuard,
+    },
+  ],
+})
+export class AppModule {}
+```
+
+**4. `@Public()` sirf teen jagah lagaya**: `GET /` (root, `app.controller.ts`), `POST /auth/signup`, `POST /auth/signin`. Baaki saare routes — `/auth/whoami`, `/auth/whoami_v2`, `GET /auth/:id`, `GET /auth`, `PUT /auth/:id`, `DELETE /auth/:id`, `POST /auth/signout` — ab **default se** login-required hain, koi manual `@UseGuards()` ki zaroorat nahi.
+
+Kuch important cheezein:
+
+- **`Reflector` ek globally-available, built-in provider hai** (`@nestjs/core` se) — kisi module ke `providers` me explicitly register karne ki zaroorat nahi padti, bas constructor me inject kar do. Isi wajah se `AuthGuard` ko is baar (Step 20 ke `CurrentUserInterceptor` ke ulat) `AppModule` (root module) me register kiya — `CurrentUserInterceptor` ki `UsersService` dependency sirf `UsersModule` provide karta tha, isliye wo wahi register karna padta tha, lekin `AuthGuard` ki `Reflector` dependency kisi bhi module se resolve ho jaati hai. Ye [Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) ke "Rule of thumb" ka hi ek doosra practical example hai.
+- **`getAllAndOverride()` method-level pehle check karta hai, phir class-level** — array `[context.getHandler(), context.getClass()]` me order matter karta hai. Agar kisi route pe method-level `@Public()` mile, wahi use hota hai; na mile to poori class pe dekha jaata hai. Isse kal agar koi poora controller `@Public()` kiya jaaye, to usme ek specific sensitive route ko method-level `@Public()` na lagakar phir bhi protected rakha ja sakta hai.
+- **`AuthGuard` (jab tak `@Injectable()` nahi tha) pehle bhi class-reference se `@UseGuards(AuthGuard)` me kaam kar raha tha** — lekin ab jab constructor me `Reflector` dependency aa gayi aur isse `APP_GUARD` provider ke roop me register karna tha, `@Injectable()` lagana zaroori ho gaya (Nest ko pata hona chahiye ki ye ek DI-managed provider hai, tabhi constructor dependency resolve hogi).
+- **`whoami_v2` se method-level `@UseGuards(AuthGuard)` hataya** — [Step 21](#step-21-authguard--route-ko-login-required-banaya) me isi route pe laga tha; ab jab guard globally laga hai, wahi duplicate-application wali galti dobara hoti (jaisa [Step 19/20](#step-19-currentuserinterceptor--session-se-poora-user-request-pe-attach-kiya) me `CurrentUserInterceptor` ke saath hui thi) — isliye hataya.
+- **Live testing se verify kiya** (`curl` se, session cookie ke saath/bina) — public routes (`/`, `/auth/signup`, `/auth/signin`) bina session ke `200`/`201` dete hain; baaki sab routes bina session ke `403`, session cookie ke saath `200` dete hain — exactly jaisa design kiya gaya tha.
+
+**Known gaps (jaan-bujh kar abhi fix nahi kiye)**:
+- **`POST /auth/signout` ko `@Public()` nahi banaya** — ab agar koi already-logged-out client dobara signout call kare, to `403` milega (pehle silently no-op hota tha). Ye ek design choice hai, "sirf logged-in user hi signout kar sakta hai" ke principle se consistent, lekin UX-wise "harmless idempotent public action" bhi banaya ja sakta tha.
+- **`/auth/whoami` aur `/auth/whoami_v2` dono response me abhi bhi raw `password` (hashed) bhej rahe hain** — [Step 11](#step-11-response-serialization-with-interceptor)/[Step 12](#step-12-reusable-serialize-decorator-banaya) ka `@Serialize(UserDto)` pattern in dono naye routes pe kabhi laga hi nahi gaya (ye routes Step 18/19 me bane the, tab tak serialization sirf `:id`/list routes pe focus tha). Isse HTTP status/access-control se koi lena dena nahi, ye ek alag, pehle se maujood gap hai jo is guard-implementation testing ke dauraan discover hua.
 
 ---
 
@@ -1186,6 +1266,10 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **Guard vs Interceptor** | [Step 21](#step-21-authguard--route-ko-login-required-banaya) | Guard sirf gatekeeping karta hai (request ko aage jaane du ya na du), Interceptor request/response ko modify/enrich karta hai — dono alag concerns hain aur lifecycle me Guard **pehle** chalta hai (Middleware → Guard → Interceptor → Pipe → Handler) | |
 | **`@UseGuards()`** | [Step 21](#step-21-authguard--route-ko-login-required-banaya) | Ek ya zyada Guards ko method-level, class-level, ya globally (`APP_GUARD` se, `APP_INTERCEPTOR` jaisa hi pattern) kisi route/controller/application pe attach karta hai | |
 | **Guard-Level Early Rejection (performance)** | [Step 21](#step-21-authguard--route-ko-login-required-banaya) | Kyunki Guard Interceptor se pehle chalta hai, `false` return karte hi request turant reject ho jaati hai — us route ke liye lage koi bhi (global bhi) Interceptor ka kaam (jaise `CurrentUserInterceptor` ka DB `findOne()` call) bhi skip ho jaata hai, na ki sirf controller handler | |
+| **Fail-Closed vs Fail-Open (default access policy)** | [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator) | Fail-open = default me sab kuch accessible, protect karne ke liye explicitly kuch lagana padta hai (bhoolne ka risk); fail-closed = default me sab kuch protected, jo genuinely public hona chahiye usse explicitly mark karna padta hai — production apps generally fail-closed prefer karte hain (safer default) | |
+| **`SetMetadata()` (custom metadata decorator)** | [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator) | `@nestjs/common` ka function jo kisi route handler/class pe custom key-value metadata "attach" kar deta hai (e.g. `@Public()` isse banaya) — data request se nikaalta nahi, class/method definition pe khud chipka deta hai, jise baad me `Reflector` se padha ja sakta hai | |
+| **`Reflector` + `getAllAndOverride()`** | [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator) | `Reflector` (globally-available, `@nestjs/core` se) `SetMetadata()` se laga metadata wapas padhta hai. `getAllAndOverride(key, [handler, class])` pehle METHOD-level check karta hai, na mile to CLASS-level — method-level value class-level ko "override" kar deti hai | |
+| **Globally-Available Provider (no module registration needed)** | [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator) | `Reflector` jaise kuch built-in Nest providers kisi bhi module me bina explicit registration ke inject ho jaate hain — isi wajah se `AuthGuard` (jiski dependency sirf `Reflector` hai) `AppModule` me register ho saka, jabki `CurrentUserInterceptor` (jiski dependency `UsersService`, ek feature-module-private provider, thi) sirf `UsersModule` me register ho sakta tha ([Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) se contrast) | |
 
 ---
 

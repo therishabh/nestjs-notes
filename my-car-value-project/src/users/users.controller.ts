@@ -11,7 +11,6 @@ import {
   Session,
   UnauthorizedException,
   Request,
-  UseGuards,
 } from '@nestjs/common';
 import { CreateUserDto, UpdateUserDto } from './user.dto';
 import { UsersService } from './users.service';
@@ -32,12 +31,13 @@ import { AuthV2Service } from './auth-v2.service';
 // me istemal karte hi seedha logged-in `User` mil jaata hai, bina manually session/DB call kiye.
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from './user.entity';
-// AuthGuard — route ko "login required" banata hai (dekho src/users/guards/AuthGuard.ts).
-// CurrentUserInterceptor (Step 19/20) ke ulat, guard koi data attach/transform nahi karta —
-// sirf `true`/`false` decide karta hai ki request controller handler tak pahunchne di jaaye
-// ya nahi. `false` milte hi Nest khud `403 Forbidden` bhej deta hai, controller ka code
-// chalta hi nahi.
-import { AuthGuard } from './guards/AuthGuard';
+// `AuthGuard` ab is controller me kahi import/apply nahi karna padta — pehle yaha
+// `whoami_v2` pe method-level `@UseGuards(AuthGuard)` laga tha, ab usse `app.module.ts`
+// me `APP_GUARD` se GLOBALLY register kar diya gaya hai (README Step 21 ke "senior
+// notes" wala fail-closed fix) — poori application by-default "login required" hai.
+// Isliye is file me ab sirf `Public` chahiye, un chand routes ke liye jo explicitly
+// guard se bahar rehne chahiye (signup, signin).
+import { Public } from './decorators/public.decorator';
 // `CurrentUserInterceptor` ab is controller me kahi import/apply nahi karna padta —
 // pehle yaha `@UseInterceptors(CurrentUserInterceptor)` class-level pe lagaya gaya tha
 // (jo sirf is controller/`/auth/*` routes tak limited tha), ab usse `users.module.ts`
@@ -83,6 +83,11 @@ export class UsersController {
   ) {}
 
   // POST /auth/signup — naya user create karne ka endpoint
+  // `@Public()` zaroori hai — AuthGuard ab GLOBALLY "login required" default lagata hai
+  // (app.module.ts), lekin naya user to definition se hi abhi login nahi hai, isliye
+  // signup ko explicitly guard se exclude kiya. Bina isके, `POST /auth/signup` khud
+  // `403 Forbidden` deta — koi bhi naya user kabhi signup hi nahi kar paata.
+  @Public()
   @Post('/signup')
   // @Serialize(UserDto) — response jaane se pehle SerializeInterceptor ise UserDto
   // (sirf id + email, @Expose() wale fields) me convert kar deta hai, isliye neeche
@@ -113,6 +118,9 @@ export class UsersController {
   // POST /auth/signin — existing user login karne ka endpoint. Signup jaisa hi
   // `CreateUserDto` (email + password) reuse kiya — dono requests ka shape same hai,
   // isliye alag "SigninDto" banane ki zaroorat nahi padi.
+  // `@Public()` yaha bhi zaroori hai — login karne ke liye khud "already logged in" hona
+  // ek chicken-and-egg problem hota, isliye ye route bhi global AuthGuard se exempt hai.
+  @Public()
   @Post('/signin')
   @Serialize(UserDto)
   async signIn(
@@ -174,13 +182,11 @@ export class UsersController {
   // hai. Yaha dobara `@UseInterceptors(CurrentUserInterceptor)` lagate to interceptor
   // is route pe 2 baar chalta (ek extra/wasted `findOne()` DB call).
   //
-  // `@UseGuards(AuthGuard)` — is route ko "login required" bana diya (demo ke liye,
-  // isi ek route pe lagaya hai). Guards Interceptors se PEHLE chalte hain (Middleware →
-  // Guard → Interceptor → Pipe → Handler), isliye agar user logged-in nahi hai
-  // (`session.userId` falsy), `AuthGuard` `false` return karke request ko turant
-  // `403 Forbidden` de deta hai — na `CurrentUserInterceptor` ka `findOne()` DB call
-  // hota hai, na `whoAmIV2()` ka body chalta hai.
-  @UseGuards(AuthGuard)
+  // Pehle yaha `@UseGuards(AuthGuard)` bhi method-level laga tha ("login required"
+  // banane ke liye) — ab wo redundant ho gaya hai kyunki `AuthGuard` khud globally
+  // `APP_GUARD` se register hai (dekho app.module.ts), poori application ke har route
+  // pe apply hota hai. Yaha dobara lagate to (`CurrentUserInterceptor` ki tarah hi)
+  // guard is route pe 2 baar chalta — isliye hataya.
   @Get('/whoami_v2')
   whoAmIV2(@Request() request: RequestWithCurrentUser) {
     return request.currentUser;
