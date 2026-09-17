@@ -30,6 +30,7 @@ Ye project Nest CLI se generate kiya gaya hai (`nest new my-car-value-project`).
   - [Step 20: `CurrentUserInterceptor` Ko `APP_INTERCEPTOR` Se Global Banaya](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya)
   - [Step 21: `AuthGuard` — Route Ko Login-Required Banaya](#step-21-authguard--route-ko-login-required-banaya)
   - [Step 22: Fail-Closed Auth — `APP_GUARD` Aur `@Public()` Decorator](#step-22-fail-closed-auth--app_guard-aur-public-decorator)
+  - [Step 23: `@nestjs/config` — Environment-Based Configuration](#step-23-nestjsconfig--environment-based-configuration)
 - [Concepts Glossary](#concepts-glossary)
 - [Interview Prep — Q&A](#interview-prep--qa)
 
@@ -1187,6 +1188,70 @@ Kuch important cheezein:
 - **`POST /auth/signout` ko `@Public()` nahi banaya** — ab agar koi already-logged-out client dobara signout call kare, to `403` milega (pehle silently no-op hota tha). Ye ek design choice hai, "sirf logged-in user hi signout kar sakta hai" ke principle se consistent, lekin UX-wise "harmless idempotent public action" bhi banaya ja sakta tha.
 - **`/auth/whoami` aur `/auth/whoami_v2` dono response me abhi bhi raw `password` (hashed) bhej rahe hain** — [Step 11](#step-11-response-serialization-with-interceptor)/[Step 12](#step-12-reusable-serialize-decorator-banaya) ka `@Serialize(UserDto)` pattern in dono naye routes pe kabhi laga hi nahi gaya (ye routes Step 18/19 me bane the, tab tak serialization sirf `:id`/list routes pe focus tha). Isse HTTP status/access-control se koi lena dena nahi, ye ek alag, pehle se maujood gap hai jo is guard-implementation testing ke dauraan discover hua.
 
+### Step 23: `@nestjs/config` — Environment-Based Configuration
+
+Ab tak DB config hardcoded thi (`database: 'db.sqlite'`, [Step 3](#step-3-typeorm--sqlite-setup-kiya) se) — dev aur test dono ek hi SQLite file use karte, aur session secret jaisi cheez ([Step 17](#step-17-cookie-sessions--authme-se-logged-in-user-pata-karna)) sirf `main.ts` me direct `process.env.COOKIE_SESSION_KEY` se ek-off padhi jaati thi. Is step me `@nestjs/config` add kiya — ab environment (dev/test/prod) ke hisaab se alag `.env` file load hoti hai, aur config values ek proper, DI-injectable `ConfigService` se milti hain.
+
+**1. `.env.development` / `.env.test` / `.env.example`** — environment-specific config files:
+
+```
+# .env.development
+DB_NAME=db.sqlite
+
+# .env.test
+DB_NAME=test.sqlite
+
+# .env.example (committed — sirf shape dikhata hai, real value nahi)
+DB_NAME=test.sqlite
+```
+
+**`.gitignore`** me `.env.development` aur `.env.test` add kiye — inme abhi sirf ek harmless filename hai, lekin kal secrets (API keys, DB credentials) bhi yahi file me aayenge, isliye shuru se hi commit na karne ki habit sahi hai. `.env.example` jaan-bujh kar **commit kiya** — teammates ko pata chale ki kaunse env vars chahiye, bina real values expose kiye.
+
+**2. `package.json`** — `start:dev` script me `NODE_ENV` set kiya:
+
+```diff
+- "start:dev": "nest start --watch",
++ "start:dev": "NODE_ENV=development nest start --watch",
+```
+
+**3. `app.module.ts`** — `ConfigModule` register kiya, aur `TypeOrmModule.forRoot()` ko `forRootAsync()` me badla:
+
+```ts
+// app.module.ts
+import { ConfigModule, ConfigService } from '@nestjs/config';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: `.env.${process.env.NODE_ENV}`,
+    }),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        type: 'sqlite',
+        database: config.get<string>('DB_NAME'),
+        synchronize: true,
+        entities: [User, Report],
+      }),
+    }),
+    UsersModule,
+    ReportsModule,
+  ],
+  ...
+})
+export class AppModule {}
+```
+
+Kuch important cheezein:
+
+- **`isGlobal: true`** — `ConfigModule` ko poore application ke liye global bana deta hai, matlab `UsersModule`/`ReportsModule` jaise kisi bhi feature module ko `ConfigModule` alag se `imports` karne ki zaroorat nahi, `ConfigService` seedha inject ho jaata hai. Conceptually ye `APP_GUARD`/`APP_INTERCEPTOR` ([Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya)/[Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator)) jaisa hi "module-boundary se bahar kaam karna" hai, bas mechanism alag hai — ye ek dedicated `isGlobal` flag hai, DI-token-based nahi.
+- **`envFilePath: \`.env.${process.env.NODE_ENV}\`` dynamic hai** — `NODE_ENV` ke hisaab se sahi file uthata hai. Isi wajah se `package.json` ke `start:dev` me `NODE_ENV=development` explicitly set karna pada — warna `process.env.NODE_ENV` `undefined` hota, path `.env.undefined` ban jaata, file na milti to `ConfigService` chup-chaap khaali/`undefined` values deta (crash nahi hota) — isliye ye galti se miss hona aasan hai, koi loud error nahi deta.
+- **`forRoot()` ki jagah `forRootAsync()` ZAROORI tha, optional nahi** — `forRoot()` ek plain, synchronous options-object leta hai jo module-definition time pe hi resolve ho jaata hai, jab DI container abhi poora bana hi nahi hota — isliye usme kisi DI-managed provider (`ConfigService`) ko reference nahi kiya ja sakta. `forRootAsync()` ka `useFactory` `inject` array me maangi gayi dependencies ko DI se pehle resolve karwata hai, phir factory ko pass karta hai — isse options object doosre providers ki resolved values se dynamically banaya ja sakta hai.
+- **`config.get<string>('DB_NAME')` ek type-safety gotcha hai** — generic `<string>` sirf TypeScript ko "trust karo, string hi hogi" batata hai, runtime guarantee nahi deta. Agar `.env` file me `DB_NAME` key missing/typo ho, to ye `undefined` return karega — TS compile-time pe error nahi degi, lekin runtime pe TypeORM ko `database: undefined` mil jaayega. Ye bilkul wahi risk hai jo [Step 12](#step-12-reusable-serialize-decorator-banaya) ke `this.dto: any` wale gotcha me discuss hua tha — generic/`any` compiler ko "chup" kar deta hai.
+
+**Known gap (jaan-bujh kar abhi fix nahi kiya)**: `package.json` me `cross-env` package install ki gayi hai (Windows pe `VAR=value command` syntax kaam nahi karta, `cross-env` isse cross-platform banata hai), lekin `start:dev` script abhi bhi seedha `NODE_ENV=development nest start --watch` hai — `cross-env` ka istemal hi nahi ho raha (`cross-env NODE_ENV=development nest start --watch` hona chahiye tha). Isse macOS/Linux pe koi farak nahi padta, lekin Windows pe ye script fail ho jaayega.
+
 ---
 
 ## Concepts Glossary
@@ -1275,6 +1340,10 @@ Jitne bhi NestJS/TS/TypeORM concepts is project me cover kiye hain, unki short r
 | **`SetMetadata()` (custom metadata decorator)** | [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator) | `@nestjs/common` ka function jo kisi route handler/class pe custom key-value metadata "attach" kar deta hai (e.g. `@Public()` isse banaya) — data request se nikaalta nahi, class/method definition pe khud chipka deta hai, jise baad me `Reflector` se padha ja sakta hai | [`3820e4e`](https://github.com/therishabh/nestjs-notes/commit/3820e4e) |
 | **`Reflector` + `getAllAndOverride()`** | [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator) | `Reflector` (globally-available, `@nestjs/core` se) `SetMetadata()` se laga metadata wapas padhta hai. `getAllAndOverride(key, [handler, class])` pehle METHOD-level check karta hai, na mile to CLASS-level — method-level value class-level ko "override" kar deti hai | [`3820e4e`](https://github.com/therishabh/nestjs-notes/commit/3820e4e) |
 | **Globally-Available Provider (no module registration needed)** | [Step 22](#step-22-fail-closed-auth--app_guard-aur-public-decorator) | `Reflector` jaise kuch built-in Nest providers kisi bhi module me bina explicit registration ke inject ho jaate hain — isi wajah se `AuthGuard` (jiski dependency sirf `Reflector` hai) `AppModule` me register ho saka, jabki `CurrentUserInterceptor` (jiski dependency `UsersService`, ek feature-module-private provider, thi) sirf `UsersModule` me register ho sakta tha ([Step 20](#step-20-currentuserinterceptor-ko-app_interceptor-se-global-banaya) se contrast) | [`3820e4e`](https://github.com/therishabh/nestjs-notes/commit/3820e4e) |
+| **`ConfigModule.forRoot({ isGlobal: true })`** | [Step 23](#step-23-nestjsconfig--environment-based-configuration) | `.env` file padh kar `ConfigService` ko poori application me (module boundary se bahar) available karata hai — `NODE_ENV` ke hisaab se dynamic `.env.<environment>` file uthata hai | |
+| **`forRoot()` vs `forRootAsync()`** | [Step 23](#step-23-nestjsconfig--environment-based-configuration) | `forRoot()` ek static, synchronous options-object leta hai (module-definition time pe hi resolve, DI provider reference nahi kar sakta). `forRootAsync({ inject, useFactory })` DI se dependencies (jaise `ConfigService`) pehle resolve karwa kar unhe factory ko deta hai — isse options object doosre providers ki resolved value se banaya ja sakta hai | |
+| **`.env.example` vs `.env.<environment>` (gitignore convention)** | [Step 23](#step-23-nestjsconfig--environment-based-configuration) | `.env.example` (placeholder values, shape dikhane ke liye) **commit** hota hai; `.env.development`/`.env.test`/`.env.production` (real, environment-specific values) `.gitignore` me hote hain — secrets/environment-specific config kabhi git history me nahi jaana chahiye | |
+| **`ConfigService.get<T>()` ka type-safety gotcha** | [Step 23](#step-23-nestjsconfig--environment-based-configuration) | Generic `<string>` sirf TypeScript ko "trust karo" batata hai — agar env var missing/typo ho to runtime pe `undefined` milta hai, TS compile-time pe pakad nahi paata (`any`/generic ka wahi risk jo [Step 12](#step-12-reusable-serialize-decorator-banaya) me discuss hua) | |
 
 ---
 
